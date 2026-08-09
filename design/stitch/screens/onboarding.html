@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SMSpend Onboarding</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        'paper': '#F3F0E8',
+                        'ink': '#0F3D32',
+                        'mint': '#6EDDB5',
+                        'mint-light': '#E0F7EF',
+                        'ink-light': '#2A6352',
+                        'surface': '#FDFCF9',
+                        'surface-dim': '#EAE7DE',
+                        'on-surface': '#1A1C19',
+                        'on-surface-variant': '#424844',
+                        'outline': '#727974',
+                        'outline-variant': '#C1C9C3',
+                        'primary': '#0F3D32',
+                        'on-primary': '#FFFFFF',
+                        'primary-container': '#A5F5CE',
+                        'on-primary-container': '#002116',
+                        'secondary': '#4B635A',
+                        'on-secondary': '#FFFFFF',
+                        'secondary-container': '#CDE8DC',
+                        'on-secondary-container': '#072019',
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.5rem",
+                        "lg": "1rem",
+                        "xl": "1.5rem",
+                        "full": "9999px"
+                    },
+                    fontFamily: {
+                        "headline": ["DM Sans", "sans-serif"],
+                        "display": ["DM Sans", "sans-serif"],
+                        "body": ["DM Sans", "sans-serif"],
+                        "label": ["DM Sans", "sans-serif"]
+                    },
+                    spacing: {
+                        'margin-mobile': '1rem',
+                        'margin-desktop': '2rem'
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'DM Sans', sans-serif;
+            background-color: #F3F0E8; /* paper */
+            color: #0F3D32; /* ink */
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="antialiased min-h-screen flex flex-col items-center justify-center bg-paper text-ink selection:bg-mint selection:text-ink">
+<!-- Mobile Device Mockup Container -->
+<main class="w-full max-w-[400px] mx-auto h-[884px] md:h-[800px] md:my-10 md:rounded-[3rem] md:shadow-2xl bg-surface relative overflow-hidden flex flex-col border-[12px] border-ink md:border-[16px]">
+<!-- Status Bar (Decorative for Mockup) -->
+<div class="h-8 w-full flex justify-between items-center px-6 pt-2 text-ink-light text-xs font-medium z-10">
+<span>9:41</span>
+<div class="flex gap-2 items-center">
+<span class="material-symbols-outlined text-[14px]">signal_cellular_4_bar</span>
+<span class="material-symbols-outlined text-[14px]">wifi</span>
+<span class="material-symbols-outlined text-[14px]">battery_full</span>
+</div>
+</div>
+<!-- Scrollable Content Area -->
+<div class="flex-1 overflow-y-auto flex flex-col px-6 pt-12 pb-32">
+<!-- Branding Header -->
+<header class="flex flex-col items-center text-center mb-10">
+<div class="w-16 h-16 rounded-full bg-mint-light flex items-center justify-center mb-6 shadow-sm border border-mint/20">
+<span class="material-symbols-outlined text-4xl text-ink">chat_bubble</span>
+</div>
+<h1 class="text-4xl font-headline font-bold text-ink tracking-tight mb-4">SMSpend</h1>
+<p class="text-base text-ink-light leading-relaxed max-w-[280px]">
+                    See this week's spending from your bank SMS — private, on this phone.
+                </p>
+</header>
+<!-- Onboarding Steps -->
+<div class="flex flex-col gap-4 w-full">
+<!-- Step 1 Card -->
+<div class="bg-paper rounded-2xl p-5 border border-outline-variant/30 flex gap-4 items-start shadow-sm hover:shadow-md transition-shadow">
+<div class="mt-1 w-8 h-8 rounded-full bg-mint flex items-center justify-center shrink-0">
+<span class="text-ink font-bold text-sm">1</span>
+</div>
+<div class="flex-1">
+<h3 class="text-lg font-bold text-ink mb-1">Allow SMS</h3>
+<p class="text-sm text-ink-light leading-snug">
+                            Enable SMSpend to read bank notifications and automatically log your expenses.
+                        </p>
+</div>
+</div>
+<!-- Step 2 Card -->
+<div class="bg-paper rounded-2xl p-5 border border-outline-variant/30 flex gap-4 items-start shadow-sm hover:shadow-md transition-shadow">
+<div class="mt-1 w-8 h-8 rounded-full bg-mint flex items-center justify-center shrink-0">
+<span class="text-ink font-bold text-sm">2</span>
+</div>
+<div class="flex-1">
+<h3 class="text-lg font-bold text-ink mb-1">Add Gemini key</h3>
+<p class="text-sm text-ink-light leading-snug">
+                            Connect your API key to unlock intelligent transaction categorization and insights.
+                        </p>
+</div>
+</div>
+</div>
+</div>
+<!-- Fixed Bottom Action -->
+<div class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-surface via-surface to-transparent pt-12 pb-8 px-6">
+<button class="w-full bg-ink text-white font-bold text-lg py-4 rounded-xl shadow-lg hover:bg-ink-light active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+                Continue
+                <span class="material-symbols-outlined text-mint">arrow_forward</span>
+</button>
+</div>
+</main>
+</body></html>

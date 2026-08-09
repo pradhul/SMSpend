@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport"/>
+<title>SMSpend - Retag Transaction</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-low": "#f3f4f1",
+                        "on-tertiary-container": "#ca9187",
+                        "on-primary": "#ffffff",
+                        "on-secondary-fixed-variant": "#0d503f",
+                        "outline": "#717975",
+                        "on-secondary-container": "#316d5b",
+                        "surface": "#f9f9f7",
+                        "on-primary-fixed-variant": "#234e43",
+                        "on-background": "#1a1c1b",
+                        "inverse-on-surface": "#f0f1ef",
+                        "on-error-container": "#93000a",
+                        "tertiary-container": "#532b24",
+                        "tertiary": "#391610",
+                        "on-tertiary-fixed-variant": "#673b33",
+                        "secondary-fixed": "#b1efd8",
+                        "tertiary-fixed-dim": "#f6b8ad",
+                        "surface-container-lowest": "#ffffff",
+                        "primary-fixed": "#beecdc",
+                        "background": "#f9f9f7",
+                        "on-tertiary": "#ffffff",
+                        "on-primary-fixed": "#002019",
+                        "surface-container-high": "#e8e8e6",
+                        "outline-variant": "#c0c8c4",
+                        "surface-container": "#edeeec",
+                        "primary-container": "#0f3d32",
+                        "on-secondary": "#ffffff",
+                        "inverse-primary": "#a2d0c0",
+                        "on-error": "#ffffff",
+                        "surface-container-highest": "#e2e3e0",
+                        "on-tertiary-fixed": "#33110c",
+                        "surface-bright": "#f9f9f7",
+                        "primary-fixed-dim": "#a2d0c0",
+                        "error": "#ba1a1a",
+                        "surface-tint": "#3b665a",
+                        "on-surface-variant": "#414845",
+                        "inverse-surface": "#2f3130",
+                        "tertiary-fixed": "#ffdad4",
+                        "on-surface": "#1a1c1b",
+                        "secondary-fixed-dim": "#96d3bd",
+                        "error-container": "#ffdad6",
+                        "primary": "#00261e",
+                        "secondary-container": "#aeedd5",
+                        "secondary": "#2c6956",
+                        "on-primary-container": "#7ba899",
+                        "surface-variant": "#e2e3e0",
+                        "on-secondary-fixed": "#002118",
+                        "surface-dim": "#d9dad8"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "container-padding": "20px",
+                        "card-gutter": "12px",
+                        "stack-gap": "16px",
+                        "section-margin": "32px",
+                        "base": "8px"
+                    },
+                    "fontFamily": {
+                        "label-sm": ["DM Sans"],
+                        "label-md": ["DM Sans"],
+                        "body-md": ["DM Sans"],
+                        "headline-lg": ["DM Sans"],
+                        "display-amount": ["DM Sans"],
+                        "body-lg": ["DM Sans"],
+                        "headline-md": ["DM Sans"],
+                        "headline-lg-mobile": ["DM Sans"]
+                    },
+                    "fontSize": {
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "label-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "500" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["28px", { "lineHeight": "36px", "fontWeight": "700" }],
+                        "display-amount": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-lg": ["18px", { "lineHeight": "26px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        /* Backdrop blur for the dimmed background */
+        .dimmed-overlay {
+            background-color: rgba(15, 61, 50, 0.4); /* Ink color with opacity */
+            backdrop-filter: blur(2px);
+        }
+        
+        /* Bottom sheet animation */
+        @keyframes slideUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+        .bottom-sheet {
+            animation: slideUp 0.3s ease-out forwards;
+        }
+        
+        /* Custom Checkbox */
+        .custom-checkbox:checked {
+            background-color: #00261e; /* primary */
+            border-color: #00261e;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-background min-h-screen relative font-body-md antialiased overflow-hidden">
+<!-- Dimmed Background (Simulating the screen behind) -->
+<div class="absolute inset-0 z-0">
+<!-- Top App Bar (Mocked for context, slightly visible under overlay) -->
+<header class="flex justify-between items-center w-full px-container-padding py-base max-w-full bg-background">
+<span class="material-symbols-outlined text-primary-container" data-icon="account_balance_wallet" data-weight="fill" style="font-variation-settings: 'FILL' 1;">account_balance_wallet</span>
+<h1 class="text-headline-md font-headline-md font-bold text-primary-container">SMSpend</h1>
+<span class="material-symbols-outlined text-primary-container" data-icon="settings">settings</span>
+</header>
+<!-- Dummy Content for the background -->
+<main class="px-container-padding pt-stack-gap pb-32">
+<div class="mb-section-margin">
+<h2 class="text-label-sm font-label-sm text-on-surface-variant mb-card-gutter uppercase">Recent Transactions</h2>
+<!-- Mock Transaction Items -->
+<div class="space-y-stack-gap">
+<!-- Item 1 -->
+<div class="bg-surface-container-lowest rounded-xl p-card-gutter border border-outline-variant flex items-center justify-between">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="shopping_cart">shopping_cart</span>
+</div>
+<div>
+<p class="text-body-md font-body-md font-medium text-on-surface">Swiggy Instamart</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Today, 2:30 PM • Uncategorized</p>
+</div>
+</div>
+<span class="text-body-md font-body-md font-semibold text-on-surface">₹890</span>
+</div>
+<!-- Item 2 -->
+<div class="bg-surface-container-lowest rounded-xl p-card-gutter border border-outline-variant flex items-center justify-between">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="directions_car">directions_car</span>
+</div>
+<div>
+<p class="text-body-md font-body-md font-medium text-on-surface">Uber Rides</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Yesterday, 9:15 AM • Transport</p>
+</div>
+</div>
+<span class="text-body-md font-body-md font-semibold text-on-surface">₹450</span>
+</div>
+</div>
+</div>
+</main>
+<!-- Bottom Nav Bar (Mocked for context) -->
+<nav class="fixed bottom-0 left-0 w-full z-10 flex justify-around items-center px-4 pb-safe h-20 bg-surface border-t border-outline-variant rounded-t-xl shadow-sm">
+<div class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-full px-5 py-1.5">
+<span class="material-symbols-outlined" data-icon="home" data-weight="fill" style="font-variation-settings: 'FILL' 1;">home</span>
+<span class="text-label-sm font-label-sm mt-1">Home</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface-variant px-5 py-1.5">
+<span class="material-symbols-outlined" data-icon="analytics">analytics</span>
+<span class="text-label-sm font-label-sm mt-1">Analytics</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface-variant px-5 py-1.5">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="text-label-sm font-label-sm mt-1">Profile</span>
+</div>
+</nav>
+</div>
+<!-- Overlay & Bottom Sheet -->
+<div class="fixed inset-0 z-50 flex flex-col justify-end">
+<!-- Dimmed Backdrop -->
+<div aria-hidden="true" class="absolute inset-0 dimmed-overlay"></div>
+<!-- Bottom Sheet Content -->
+<div class="bottom-sheet relative bg-surface-container-lowest w-full rounded-t-3xl shadow-2xl flex flex-col max-h-[795px]">
+<!-- Drag Handle -->
+<div class="w-full flex justify-center pt-4 pb-2">
+<div class="w-12 h-1.5 bg-outline-variant rounded-full"></div>
+</div>
+<!-- Header -->
+<div class="px-container-padding pb-4 flex justify-between items-center border-b border-surface-container">
+<h2 class="text-headline-md font-headline-md text-on-surface">Retag Transaction</h2>
+<button class="w-8 h-8 flex items-center justify-center rounded-full bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined" data-icon="close">close</span>
+</button>
+</div>
+<div class="overflow-y-auto px-container-padding py-stack-gap flex-1">
+<!-- Transaction Details Card -->
+<div class="bg-surface-container-low rounded-xl p-card-gutter mb-section-margin flex items-center justify-between border border-surface-variant">
+<div class="flex items-center gap-3">
+<div class="w-12 h-12 rounded-full bg-surface-container-highest flex items-center justify-center text-on-surface-variant">
+<span class="material-symbols-outlined text-2xl" data-icon="receipt_long">receipt_long</span>
+</div>
+<div>
+<p class="text-body-lg font-body-lg font-medium text-on-surface">Swiggy Instamart</p>
+<p class="text-label-md font-label-md text-on-surface-variant">Needs categorization</p>
+</div>
+</div>
+<span class="text-headline-md font-headline-md text-on-surface">₹890</span>
+</div>
+<!-- Category Selection -->
+<div class="mb-section-margin">
+<h3 class="text-label-md font-label-md text-on-surface-variant mb-card-gutter uppercase tracking-wider">Select Category</h3>
+<div class="flex flex-wrap gap-3">
+<!-- Selected Chip (Grocery) -->
+<button class="flex items-center gap-1.5 bg-secondary-container text-on-secondary-container px-4 py-2 rounded-full border border-secondary-container transition-all">
+<span class="material-symbols-outlined text-[18px]" data-icon="check" data-weight="fill" style="font-variation-settings: 'FILL' 1;">check</span>
+<span class="text-body-md font-body-md font-medium">Grocery</span>
+</button>
+<!-- Unselected Chips -->
+<button class="flex items-center bg-surface text-on-surface-variant px-4 py-2 rounded-full border border-outline-variant hover:bg-surface-container-low transition-all">
+<span class="text-body-md font-body-md">Food</span>
+</button>
+<button class="flex items-center bg-surface text-on-surface-variant px-4 py-2 rounded-full border border-outline-variant hover:bg-surface-container-low transition-all">
+<span class="text-body-md font-body-md">Shopping</span>
+</button>
+<button class="flex items-center bg-surface text-on-surface-variant px-4 py-2 rounded-full border border-outline-variant hover:bg-surface-container-low transition-all">
+<span class="text-body-md font-body-md">Transport</span>
+</button>
+<button class="flex items-center bg-surface text-on-surface-variant px-4 py-2 rounded-full border border-outline-variant hover:bg-surface-container-low transition-all">
+<span class="text-body-md font-body-md">Others</span>
+</button>
+<!-- Add Custom Category -->
+<button class="flex items-center gap-1.5 bg-surface text-primary px-4 py-2 rounded-full border border-dashed border-primary hover:bg-primary-fixed transition-all">
+<span class="material-symbols-outlined text-[18px]" data-icon="add">add</span>
+<span class="text-body-md font-body-md font-medium">New</span>
+</button>
+</div>
+</div>
+<!-- Apply to Similar Checkbox -->
+<div class="mb-stack-gap">
+<label class="flex items-start gap-3 cursor-pointer p-3 rounded-lg hover:bg-surface-container-low transition-colors -ml-3">
+<div class="relative flex items-center pt-0.5">
+<input checked="" class="custom-checkbox peer h-5 w-5 rounded border-outline-variant bg-surface text-primary focus:ring-primary focus:ring-offset-0 focus:ring-2 transition-all" type="checkbox"/>
+</div>
+<div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Apply to all similar transactions this month</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant mt-0.5">Found 3 other transactions from Swiggy Instamart</p>
+</div>
+</label>
+</div>
+</div>
+<!-- Footer Actions -->
+<div class="p-container-padding border-t border-surface-container bg-surface-container-lowest rounded-b-3xl pb-safe">
+<button class="w-full bg-primary text-on-primary py-3.5 px-6 rounded-xl text-body-lg font-body-lg font-medium hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm flex items-center justify-center gap-2">
+<span class="material-symbols-outlined" data-icon="save">save</span>
+                    Save Tag
+                </button>
+</div>
+</div>
+</div>
+</body></html>

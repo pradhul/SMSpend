@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SMSpend</string>
+    <string name="widget_label">This week spend</string>
+    <string name="widget_description">This week\'s spending at a glance</string>
+    <string name="upi_listener_label">SMSpend UPI capture</string>
+</resources>

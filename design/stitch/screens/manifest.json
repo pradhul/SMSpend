@@ -1,0 +1,41 @@
+{
+  "projectId": "13330119455379583671",
+  "designSystem": "assets/16555936527553146493",
+  "screens": [
+    {
+      "id": "home",
+      "screenName": "projects/13330119455379583671/screens/ca18686800e942b6b1593bdea5423100",
+      "htmlOk": false,
+      "imgOk": false,
+      "urlCount": 2
+    },
+    {
+      "id": "category",
+      "screenName": "projects/13330119455379583671/screens/b96b609f690d441692a1cc195bfb2f22",
+      "htmlOk": false,
+      "imgOk": false,
+      "urlCount": 2
+    },
+    {
+      "id": "retag",
+      "screenName": "projects/13330119455379583671/screens/ac0d706b680740ca8de80ea4ebf773cb",
+      "htmlOk": false,
+      "imgOk": false,
+      "urlCount": 2
+    },
+    {
+      "id": "settings",
+      "screenName": "projects/13330119455379583671/screens/68ac53d05ff546d68c83f712c910bbd8",
+      "htmlOk": false,
+      "imgOk": false,
+      "urlCount": 2
+    },
+    {
+      "id": "onboarding",
+      "screenName": "projects/13330119455379583671/screens/659beb4fb63a4ba5b827f8ec5559bd6e",
+      "htmlOk": false,
+      "imgOk": false,
+      "urlCount": 1
+    }
+  ]
+}

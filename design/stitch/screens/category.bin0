@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SMSpend - Food delivery</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "outline-variant": "#c0c8c4",
+                      "secondary-container": "#aeedd5",
+                      "on-primary": "#ffffff",
+                      "error-container": "#ffdad6",
+                      "on-surface-variant": "#414845",
+                      "outline": "#717975",
+                      "background": "#f9f9f7",
+                      "primary-container": "#0f3d32",
+                      "on-secondary-container": "#316d5b",
+                      "surface-tint": "#3b665a",
+                      "surface-bright": "#f9f9f7",
+                      "on-tertiary": "#ffffff",
+                      "inverse-surface": "#2f3130",
+                      "on-secondary-fixed": "#002118",
+                      "on-tertiary-fixed-variant": "#673b33",
+                      "on-tertiary-container": "#ca9187",
+                      "on-secondary": "#ffffff",
+                      "surface-variant": "#e2e3e0",
+                      "tertiary-fixed": "#ffdad4",
+                      "surface-container-highest": "#e2e3e0",
+                      "on-surface": "#1a1c1b",
+                      "on-error-container": "#93000a",
+                      "surface-container-lowest": "#ffffff",
+                      "on-background": "#1a1c1b",
+                      "on-primary-fixed-variant": "#234e43",
+                      "inverse-primary": "#a2d0c0",
+                      "surface": "#f9f9f7",
+                      "secondary-fixed": "#b1efd8",
+                      "on-primary-container": "#7ba899",
+                      "tertiary": "#391610",
+                      "on-tertiary-fixed": "#33110c",
+                      "on-primary-fixed": "#002019",
+                      "secondary-fixed-dim": "#96d3bd",
+                      "inverse-on-surface": "#f0f1ef",
+                      "on-secondary-fixed-variant": "#0d503f",
+                      "error": "#ba1a1a",
+                      "surface-container-low": "#f3f4f1",
+                      "primary-fixed-dim": "#a2d0c0",
+                      "primary-fixed": "#beecdc",
+                      "tertiary-fixed-dim": "#f6b8ad",
+                      "on-error": "#ffffff",
+                      "primary": "#00261e",
+                      "tertiary-container": "#532b24",
+                      "secondary": "#2c6956",
+                      "surface-dim": "#d9dad8",
+                      "surface-container": "#edeeec",
+                      "surface-container-high": "#e8e8e6"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "section-margin": "32px",
+                      "container-padding": "20px",
+                      "card-gutter": "12px",
+                      "stack-gap": "16px",
+                      "base": "8px"
+              },
+              "fontFamily": {
+                      "headline-lg-mobile": [
+                              "DM Sans"
+                      ],
+                      "label-md": [
+                              "DM Sans"
+                      ],
+                      "headline-md": [
+                              "DM Sans"
+                      ],
+                      "display-amount": [
+                              "DM Sans"
+                      ],
+                      "body-lg": [
+                              "DM Sans"
+                      ],
+                      "headline-lg": [
+                              "DM Sans"
+                      ],
+                      "body-md": [
+                              "DM Sans"
+                      ],
+                      "label-sm": [
+                              "DM Sans"
+                      ]
+              },
+              "fontSize": {
+                      "headline-lg-mobile": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "label-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "letterSpacing": "0.01em",
+                                      "fontWeight": "500"
+                              }
+                      ],
+                      "headline-md": [
+                              "20px",
+                              {
+                                      "lineHeight": "28px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "display-amount": [
+                              "40px",
+                              {
+                                      "lineHeight": "48px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-lg": [
+                              "18px",
+                              {
+                                      "lineHeight": "26px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-lg": [
+                              "28px",
+                              {
+                                      "lineHeight": "36px",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-md": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "label-sm": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+      </script>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-background min-h-screen font-body-md antialiased md:max-w-md md:mx-auto md:border-x md:border-surface-variant md:shadow-lg md:bg-white relative">
+<!-- Header / TopAppBar (Modified for detail view) -->
+<header class="flex justify-between items-center w-full px-container-padding py-base max-w-full bg-background z-50 sticky top-0 md:bg-white">
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-low transition-colors text-on-surface">
+<span class="material-symbols-outlined" data-icon="arrow_back">arrow_back</span>
+</button>
+<h1 class="text-headline-md font-headline-md text-on-surface">Food delivery</h1>
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-low transition-colors text-on-surface">
+<span class="material-symbols-outlined" data-icon="filter_list">filter_list</span>
+</button>
+</header>
+<!-- Main Content Canvas -->
+<main class="px-container-padding pb-section-margin pt-base flex flex-col gap-section-margin">
+<!-- Hero Section: Total Amount -->
+<section class="flex flex-col items-center justify-center py-6 text-center animate-[fadeIn_0.5s_ease-out]">
+<div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-secondary-container text-on-secondary-container mb-4">
+<span class="material-symbols-outlined text-3xl" data-icon="restaurant" data-weight="fill" style="font-variation-settings: 'FILL' 1;">restaurant</span>
+</div>
+<h2 class="text-display-amount font-display-amount text-primary-container">₹4,210</h2>
+<p class="text-label-md font-label-md text-on-surface-variant mt-1">8 payments this month</p>
+</section>
+<!-- Insights/Progress Mini Widget -->
+<section class="bg-surface-container-lowest rounded-xl p-4 border border-surface-variant">
+<div class="flex justify-between items-center mb-2">
+<span class="text-label-md font-label-md text-on-surface">Budget Limit</span>
+<span class="text-label-md font-label-md text-on-surface-variant">84% used</span>
+</div>
+<div class="w-full h-2 bg-surface-container-high rounded-full overflow-hidden">
+<div class="h-full bg-secondary rounded-full" style="width: 84%"></div>
+</div>
+<p class="text-label-sm font-label-sm text-on-surface-variant mt-2 text-right">₹790 remaining</p>
+</section>
+<!-- Transaction List -->
+<section class="flex flex-col gap-stack-gap">
+<div class="flex justify-between items-center mb-2">
+<h3 class="text-headline-md font-headline-md text-on-surface">Transactions</h3>
+</div>
+<div class="flex flex-col gap-card-gutter">
+<!-- Group: August -->
+<div class="text-label-sm font-label-sm text-on-surface-variant uppercase tracking-wider mb-2 sticky top-[72px] bg-background/90 md:bg-white/90 backdrop-blur py-1 z-10">August</div>
+<!-- Item 1 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-xl border border-surface-variant hover:border-outline-variant transition-colors group cursor-pointer">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-primary-container group-hover:bg-secondary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="fastfood">fastfood</span>
+</div>
+<div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Swiggy</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Aug 8, 12:45 PM</p>
+</div>
+</div>
+<span class="text-body-lg font-body-lg text-on-surface font-semibold">₹840</span>
+</div>
+<!-- Item 2 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-xl border border-surface-variant hover:border-outline-variant transition-colors group cursor-pointer">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-primary-container group-hover:bg-secondary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="lunch_dining">lunch_dining</span>
+</div>
+<div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Zomato</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Aug 7, 8:20 PM</p>
+</div>
+</div>
+<span class="text-body-lg font-body-lg text-on-surface font-semibold">₹620</span>
+</div>
+<!-- Item 3 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-xl border border-surface-variant hover:border-outline-variant transition-colors group cursor-pointer">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-primary-container group-hover:bg-secondary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="local_grocery_store">local_grocery_store</span>
+</div>
+<div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Instamart</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Aug 6, 11:15 AM</p>
+</div>
+</div>
+<span class="text-body-lg font-body-lg text-on-surface font-semibold">₹1,250</span>
+</div>
+<!-- Item 4 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-xl border border-surface-variant hover:border-outline-variant transition-colors group cursor-pointer">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-primary-container group-hover:bg-secondary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="fastfood">fastfood</span>
+</div>
+<div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Swiggy</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Aug 5, 1:30 PM</p>
+</div>
+</div>
+<span class="text-body-lg font-body-lg text-on-surface font-semibold">₹450</span>
+</div>
+<!-- Item 5 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-xl border border-surface-variant hover:border-outline-variant transition-colors group cursor-pointer">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-primary-container group-hover:bg-secondary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="lunch_dining">lunch_dining</span>
+</div>
+<div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Zomato</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Aug 4, 9:10 PM</p>
+</div>
+</div>
+<span class="text-body-lg font-body-lg text-on-surface font-semibold">₹380</span>
+</div>
+<!-- Item 6 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-xl border border-surface-variant hover:border-outline-variant transition-colors group cursor-pointer">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-primary-container group-hover:bg-secondary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="fastfood">fastfood</span>
+</div>
+<div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Swiggy</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Aug 3, 12:15 PM</p>
+</div>
+</div>
+<span class="text-body-lg font-body-lg text-on-surface font-semibold">₹240</span>
+</div>
+<!-- Item 7 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-xl border border-surface-variant hover:border-outline-variant transition-colors group cursor-pointer">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-primary-container group-hover:bg-secondary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="local_grocery_store">local_grocery_store</span>
+</div>
+<div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Instamart</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Aug 2, 10:00 AM</p>
+</div>
+</div>
+<span class="text-body-lg font-body-lg text-on-surface font-semibold">₹310</span>
+</div>
+<!-- Item 8 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-xl border border-surface-variant hover:border-outline-variant transition-colors group cursor-pointer mb-20">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-primary-container group-hover:bg-secondary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="fastfood">fastfood</span>
+</div>
+<div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Swiggy</p>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Aug 1, 7:45 PM</p>
+</div>
+</div>
+<span class="text-body-lg font-body-lg text-on-surface font-semibold">₹120</span>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar logic: Suppressed because this is a sub-page/detail view with a Back button (Linear/Task-focused journey). Canvas priority. -->
+<style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</body></html>

@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SMSpend - Home</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "background": "#f9f9f7",
+                        "on-surface-variant": "#414845",
+                        "surface-container": "#edeeec",
+                        "on-surface": "#1a1c1b",
+                        "surface-container-highest": "#e2e3e0",
+                        "on-primary": "#ffffff",
+                        "on-tertiary-fixed-variant": "#673b33",
+                        "surface-bright": "#f9f9f7",
+                        "surface-tint": "#3b665a",
+                        "on-tertiary-fixed": "#33110c",
+                        "surface-container-lowest": "#ffffff",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-low": "#f3f4f1",
+                        "on-tertiary-container": "#ca9187",
+                        "tertiary-fixed": "#ffdad4",
+                        "secondary": "#2c6956",
+                        "primary": "#00261e",
+                        "surface": "#f9f9f7",
+                        "surface-dim": "#d9dad8",
+                        "surface-variant": "#e2e3e0",
+                        "on-secondary-fixed": "#002118",
+                        "surface-container-high": "#e8e8e6",
+                        "outline": "#717975",
+                        "tertiary": "#391610",
+                        "secondary-container": "#aeedd5",
+                        "on-error": "#ffffff",
+                        "on-secondary-container": "#316d5b",
+                        "secondary-fixed": "#b1efd8",
+                        "error": "#ba1a1a",
+                        "inverse-surface": "#2f3130",
+                        "on-secondary": "#ffffff",
+                        "primary-container": "#0f3d32",
+                        "on-background": "#1a1c1b",
+                        "on-primary-fixed-variant": "#234e43",
+                        "inverse-primary": "#a2d0c0",
+                        "secondary-fixed-dim": "#96d3bd",
+                        "tertiary-container": "#532b24",
+                        "on-primary-fixed": "#002019",
+                        "outline-variant": "#c0c8c4",
+                        "on-error-container": "#93000a",
+                        "inverse-on-surface": "#f0f1ef",
+                        "tertiary-fixed-dim": "#f6b8ad",
+                        "on-primary-container": "#7ba899",
+                        "primary-fixed-dim": "#a2d0c0",
+                        "primary-fixed": "#beecdc",
+                        "error-container": "#ffdad6",
+                        "on-secondary-fixed-variant": "#0d503f"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "base": "8px",
+                        "stack-gap": "16px",
+                        "section-margin": "32px",
+                        "card-gutter": "12px",
+                        "container-padding": "20px"
+                    },
+                    "fontFamily": {
+                        "body-lg": ["DM Sans"],
+                        "label-md": ["DM Sans"],
+                        "label-sm": ["DM Sans"],
+                        "body-md": ["DM Sans"],
+                        "headline-lg-mobile": ["DM Sans"],
+                        "headline-lg": ["DM Sans"],
+                        "display-amount": ["DM Sans"],
+                        "headline-md": ["DM Sans"]
+                    },
+                    "fontSize": {
+                        "body-lg": ["18px", { "lineHeight": "26px", "fontWeight": "400" }],
+                        "label-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "500" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "700" }],
+                        "headline-lg": ["28px", { "lineHeight": "36px", "fontWeight": "700" }],
+                        "display-amount": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { font-family: 'DM Sans', sans-serif; background-color: #f9f9f7; }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        /* Safe area padding for mobile bottom nav */
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom, 20px); }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface antialiased flex flex-col min-h-screen relative pb-[80px]">
+<!-- TopAppBar -->
+<header class="flex justify-between items-center w-full px-container-padding py-base max-w-full bg-background docked full-width top-0 sticky z-40 flat no shadows">
+<div class="flex items-center gap-4">
+<button class="text-primary-container p-2 rounded-full hover:bg-surface-container-low transition-colors flex items-center justify-center">
+<span aria-hidden="true" class="material-symbols-outlined text-[24px]" data-icon="account_balance_wallet">account_balance_wallet</span>
+</button>
+</div>
+<h1 class="text-headline-md font-headline-md font-bold text-primary-container">SMSpend</h1>
+<div class="flex items-center">
+<button class="text-primary-container p-2 rounded-full hover:bg-surface-container-low transition-colors flex items-center justify-center">
+<span aria-hidden="true" class="material-symbols-outlined text-[24px]" data-icon="settings">settings</span>
+</button>
+</div>
+</header>
+<!-- Main Content -->
+<main class="flex-1 w-full max-w-2xl mx-auto px-container-padding pt-6 pb-24">
+<!-- Hero Section -->
+<section class="mb-section-margin flex flex-col items-center justify-center text-center">
+<span class="text-label-sm font-label-sm text-outline tracking-[0.1em] uppercase mb-2">THIS WEEK</span>
+<h2 class="text-display-amount font-display-amount text-primary-container mb-1">₹12,480</h2>
+<p class="text-label-md font-label-md text-on-surface-variant">Aug 4–8 • Scanned just now</p>
+</section>
+<!-- Category List Section -->
+<section class="flex flex-col gap-card-gutter">
+<!-- Food delivery -->
+<div class="bg-surface-container-lowest rounded-xl p-4 border border-surface-variant flex flex-col gap-3 relative overflow-hidden group hover:border-outline-variant transition-colors">
+<div class="flex justify-between items-start z-10 relative">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low flex items-center justify-center text-primary-container">
+<span aria-hidden="true" class="material-symbols-outlined" data-icon="restaurant">restaurant</span>
+</div>
+<div>
+<h3 class="text-body-md font-body-md font-medium text-on-surface">Food delivery</h3>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Swiggy</p>
+</div>
+</div>
+<span class="text-headline-md font-headline-md text-primary-container">₹4,210</span>
+</div>
+<div class="w-full bg-surface-container h-1.5 rounded-full z-10 relative mt-1">
+<div class="bg-secondary-container h-1.5 rounded-full" style="width: 34%;"></div>
+</div>
+</div>
+<!-- Shopping -->
+<div class="bg-surface-container-lowest rounded-xl p-4 border border-surface-variant flex flex-col gap-3 relative overflow-hidden group hover:border-outline-variant transition-colors">
+<div class="flex justify-between items-start z-10 relative">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low flex items-center justify-center text-primary-container">
+<span aria-hidden="true" class="material-symbols-outlined" data-icon="shopping_bag">shopping_bag</span>
+</div>
+<div>
+<h3 class="text-body-md font-body-md font-medium text-on-surface">Shopping</h3>
+<p class="text-label-sm font-label-sm text-on-surface-variant">Amazon</p>
+</div>
+</div>
+<span class="text-headline-md font-headline-md text-primary-container">₹3,650</span>
+</div>
+<div class="w-full bg-surface-container h-1.5 rounded-full z-10 relative mt-1">
+<div class="bg-secondary-container h-1.5 rounded-full" style="width: 29%;"></div>
+</div>
+</div>
+<!-- Grocery -->
+<div class="bg-surface-container-lowest rounded-xl p-4 border border-surface-variant flex flex-col gap-3 relative overflow-hidden group hover:border-outline-variant transition-colors">
+<div class="flex justify-between items-start z-10 relative">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low flex items-center justify-center text-primary-container">
+<span aria-hidden="true" class="material-symbols-outlined" data-icon="local_mall">local_mall</span>
+</div>
+<div>
+<h3 class="text-body-md font-body-md font-medium text-on-surface">Grocery</h3>
+<p class="text-label-sm font-label-sm text-on-surface-variant">BigBasket</p>
+</div>
+</div>
+<span class="text-headline-md font-headline-md text-primary-container">₹2,480</span>
+</div>
+<div class="w-full bg-surface-container h-1.5 rounded-full z-10 relative mt-1">
+<div class="bg-secondary-container h-1.5 rounded-full" style="width: 20%;"></div>
+</div>
+</div>
+<!-- Fuel -->
+<div class="bg-surface-container-lowest rounded-xl p-4 border border-surface-variant flex flex-col gap-3 relative overflow-hidden group hover:border-outline-variant transition-colors">
+<div class="flex justify-between items-center z-10 relative">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low flex items-center justify-center text-primary-container">
+<span aria-hidden="true" class="material-symbols-outlined" data-icon="local_gas_station">local_gas_station</span>
+</div>
+<h3 class="text-body-md font-body-md font-medium text-on-surface">Fuel</h3>
+</div>
+<span class="text-headline-md font-headline-md text-primary-container">₹1,200</span>
+</div>
+<div class="w-full bg-surface-container h-1.5 rounded-full z-10 relative mt-1">
+<div class="bg-secondary-container h-1.5 rounded-full" style="width: 10%;"></div>
+</div>
+</div>
+<!-- Other -->
+<div class="bg-surface-container-lowest rounded-xl p-4 border border-surface-variant flex flex-col gap-3 relative overflow-hidden group hover:border-outline-variant transition-colors">
+<div class="flex justify-between items-center z-10 relative">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low flex items-center justify-center text-primary-container">
+<span aria-hidden="true" class="material-symbols-outlined" data-icon="more_horiz">more_horiz</span>
+</div>
+<h3 class="text-body-md font-body-md font-medium text-on-surface">Other</h3>
+</div>
+<span class="text-headline-md font-headline-md text-primary-container">₹940</span>
+</div>
+<div class="w-full bg-surface-container h-1.5 rounded-full z-10 relative mt-1">
+<div class="bg-secondary-container h-1.5 rounded-full" style="width: 7%;"></div>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-safe h-20 bg-surface md:hidden border-t-0 shadow-[0_-4px_24px_rgba(0,0,0,0.04)] rounded-t-xl" style="box-shadow: 0 -2px 10px rgba(0,0,0,0.02);">
+<!-- Home (Active) -->
+<a aria-label="Home" class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-full px-5 py-1.5 scale-90 duration-200" href="#">
+<span aria-hidden="true" class="material-symbols-outlined" data-icon="home" style="font-variation-settings: 'FILL' 1;">home</span>
+<span class="text-label-sm font-label-sm mt-1">Home</span>
+</a>
+<!-- Analytics -->
+<a aria-label="Analytics" class="flex flex-col items-center justify-center text-on-surface-variant px-5 py-1.5 hover:bg-surface-container-high rounded-full transition-all" href="#">
+<span aria-hidden="true" class="material-symbols-outlined" data-icon="analytics">analytics</span>
+<span class="text-label-sm font-label-sm mt-1">Analytics</span>
+</a>
+<!-- Profile -->
+<a aria-label="Profile" class="flex flex-col items-center justify-center text-on-surface-variant px-5 py-1.5 hover:bg-surface-container-high rounded-full transition-all" href="#">
+<span aria-hidden="true" class="material-symbols-outlined" data-icon="person">person</span>
+<span class="text-label-sm font-label-sm mt-1">Profile</span>
+</a>
+</nav>
+</body></html>
