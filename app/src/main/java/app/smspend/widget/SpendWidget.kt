@@ -18,10 +18,13 @@ import androidx.glance.background
 import androidx.glance.color.ColorProvider
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
+import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
+import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
+import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -58,20 +61,43 @@ private fun WidgetContent(snap: app.smspend.data.WidgetSnapshot?) {
             .clickable(actionStartActivity<MainActivity>()),
         verticalAlignment = Alignment.Top,
     ) {
-        Text(
-            "THIS MONTH",
-            style = TextStyle(color = ColorProvider(mute, mute), fontSize = 11.sp),
-        )
-        Text(
-            (snap?.monthSpendPaise ?: 0L).paiseToCompactRupees(),
-            style = TextStyle(
-                color = ColorProvider(debit, debit),
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-            ),
-        )
+        Row(
+            modifier = GlanceModifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(modifier = GlanceModifier.defaultWeight()) {
+                Text(
+                    "TODAY",
+                    style = TextStyle(color = ColorProvider(mute, mute), fontSize = 11.sp),
+                )
+                Text(
+                    (snap?.todaySpendPaise ?: 0L).paiseToCompactRupees(),
+                    style = TextStyle(
+                        color = ColorProvider(debit, debit),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                )
+            }
+            Spacer(GlanceModifier.width(10.dp))
+            Column(modifier = GlanceModifier.defaultWeight()) {
+                Text(
+                    "THIS MONTH",
+                    style = TextStyle(color = ColorProvider(mute, mute), fontSize = 11.sp),
+                )
+                Text(
+                    (snap?.monthSpendPaise ?: 0L).paiseToCompactRupees(),
+                    style = TextStyle(
+                        color = ColorProvider(debit, debit),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                )
+            }
+        }
         val budget = snap?.budgetPaise
-        if (budget != null && budget > 0 && snap != null) {
+        if (snap != null && budget != null && budget > 0) {
+            Spacer(GlanceModifier.height(6.dp))
             val left = budget - snap.monthSpendPaise
             Text(
                 if (left >= 0) "${left.paiseToCompactRupees()} left this month"

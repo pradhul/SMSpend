@@ -6,7 +6,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import app.smspend.data.CategoryNoteEntity
 import app.smspend.data.CategorySpend
-import app.smspend.data.CategoryYtdTrend
 import app.smspend.data.GeminiKeyCheck
 import app.smspend.data.OtherSmsExporter
 import app.smspend.data.RecurringMerchantEntity
@@ -15,6 +14,7 @@ import app.smspend.data.SmSpendDatabase
 import app.smspend.data.SpendRepository
 import app.smspend.data.TransactionEntity
 import app.smspend.data.UserPreferences
+import app.smspend.data.WeeklySpendTrend
 import app.smspend.domain.RecurringDetector
 import app.smspend.domain.SpendCategory
 import app.smspend.util.DateRanges
@@ -68,6 +68,8 @@ data class HomeUiState(
     val priorMonthShortLabel: String? = null,
     val monthlyBudgetPaise: Long? = null,
     val expectedSoon: List<RecurringMerchantEntity> = emptyList(),
+    val upcomingExplain: String? = null,
+    val upcomingExplainLoading: Boolean = false,
     val customMonth: MonthWindow? = null,
     val pickerChoices: List<MonthWindow> = emptyList(),
     val duplicateReview: DuplicateReviewState? = null,
@@ -96,6 +98,8 @@ class HomeViewModel(
     private val showMyBanks = MutableStateFlow(false)
     private val detectedBankIds = MutableStateFlow<Set<String>>(emptySet())
     private val selectedBankIds = MutableStateFlow<Set<String>>(emptySet())
+    private val upcomingExplain = MutableStateFlow<String?>(null)
+    private val upcomingExplainLoading = MutableStateFlow(false)
 
     private val categoriesByPageFlow = combine(warmCenterIndex, customMonth, segment) { center, custom, seg ->
         Triple(center, custom, seg)
@@ -226,11 +230,15 @@ class HomeViewModel(
         iconNamesFlow,
         budgetFlow,
         expectedSoonFlow,
-    ) { base, icons, budget, soon ->
+        combine(upcomingExplain, upcomingExplainLoading) { text, loading -> text to loading },
+    ) { base, icons, budget, soon, explain ->
+        val (text, loading) = explain
         base.copy(
             iconNames = icons,
             monthlyBudgetPaise = budget,
             expectedSoon = soon,
+            upcomingExplain = text,
+            upcomingExplainLoading = loading,
         )
     }.stateIn(
         viewModelScope,
@@ -326,6 +334,22 @@ class HomeViewModel(
                 }
                 .onFailure { message.value = it.message ?: "Scan failed" }
             scanning.value = false
+        }
+    }
+
+    fun explainUpcomingSpends() {
+        viewModelScope.launch {
+            val items = uiState.value.expectedSoon
+            if (items.isEmpty()) {
+                upcomingExplain.value = "No recurring merchants detected yet."
+                return@launch
+            }
+            upcomingExplainLoading.value = true
+            upcomingExplain.value = null
+            runCatching { repo.explainUpcomingSpends(items) }
+                .onSuccess { upcomingExplain.value = it }
+                .onFailure { upcomingExplain.value = it.message ?: "Could not explain upcoming spends" }
+            upcomingExplainLoading.value = false
         }
     }
 
@@ -507,8 +531,8 @@ class CategoryViewModel(
 class TrendsViewModel(
     private val repo: SpendRepository,
 ) : ViewModel() {
-    private val _trends = MutableStateFlow<List<CategoryYtdTrend>>(emptyList())
-    val trends: StateFlow<List<CategoryYtdTrend>> = _trends
+    private val _weekly = MutableStateFlow<WeeklySpendTrend?>(null)
+    val weekly: StateFlow<WeeklySpendTrend?> = _weekly
 
     private val iconNamesFlow = repo.observeCategoryIconNames()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
@@ -517,8 +541,9 @@ class TrendsViewModel(
 
     init {
         viewModelScope.launch {
-            _trends.value = runCatching { repo.categoryMonthlyTotalsThisYear() }.getOrDefault(emptyList())
-            val keys = _trends.value.map { it.bucket.key }
+            val snap = runCatching { repo.weeklySpendTrend() }.getOrNull()
+            _weekly.value = snap
+            val keys = snap?.ranks?.map { it.bucket.key }.orEmpty()
             runCatching { repo.ensureIconsForCategories(keys) }
         }
     }

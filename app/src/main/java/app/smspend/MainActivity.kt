@@ -166,9 +166,11 @@ private fun SmSpendNav(
                 LaunchedEffect(hasSmsPermission) {
                     if (hasSmsPermission) vm.refresh(forceFullRange = true)
                 }
+                val apiKey by app.prefs.geminiApiKey.collectAsStateWithLifecycle(initialValue = "")
                 HomeScreen(
                     viewModel = vm,
                     repo = app.repository,
+                    hasApiKey = apiKey.isNotBlank(),
                     onOpenSettings = { nav.navigate("settings") },
                     onOpenSearch = { nav.navigate("search") },
                     onOpenTrends = { nav.navigate("trends") },

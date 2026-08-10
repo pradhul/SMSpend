@@ -47,6 +47,14 @@ data class DuplicatePairCandidate(
     val laterSnippet: String,
 )
 
+data class UpcomingSpendHint(
+    val displayName: String,
+    val medianPaise: Long,
+    val cadenceDays: Int,
+    val lastOccurredAt: Long,
+    val nextExpectedAt: Long,
+)
+
 class GeminiCategorizer(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -109,6 +117,19 @@ class GeminiCategorizer(
             is GeminiResult.Success -> parseBatchCategoryKeys(result.text, batch.map { it.merchantKey }) to null
             is GeminiResult.Failure -> emptyMap<String, String>() to result
         }
+    }
+
+    /**
+     * Plain-language explanation of why recurring merchants look due soon.
+     */
+    suspend fun explainUpcomingSpends(
+        apiKey: String,
+        items: List<UpcomingSpendHint>,
+        nowMs: Long = System.currentTimeMillis(),
+    ): GeminiResult = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext GeminiResult.Failure(400, "API key is empty")
+        if (items.isEmpty()) return@withContext GeminiResult.Failure(400, "No recurring merchants")
+        generateContent(apiKey, upcomingExplainPrompt(items, nowMs), jsonMode = false)
     }
 
     /**
@@ -357,6 +378,38 @@ class GeminiCategorizer(
             Return a JSON array of objects: [{"pair_id":"...","same_payment":true/false}, ...]
 
             Pairs:
+            $lines
+        """.trimIndent()
+    }
+
+    private fun upcomingExplainPrompt(items: List<UpcomingSpendHint>, nowMs: Long): String {
+        val dayMs = TimeUnit.DAYS.toMillis(1)
+        val lines = items.take(8).joinToString("\n") { item ->
+            val daysUntil = ((item.nextExpectedAt - nowMs) / dayMs).toInt()
+            val daysSince = ((nowMs - item.lastOccurredAt) / dayMs).toInt().coerceAtLeast(0)
+            val cadence = when {
+                item.cadenceDays in 6..8 -> "about weekly"
+                item.cadenceDays in 25..35 -> "about monthly"
+                else -> "every ~${item.cadenceDays} days"
+            }
+            val due = when {
+                daysUntil < 0 -> "overdue by ${-daysUntil}d"
+                daysUntil == 0 -> "due today"
+                else -> "due in ${daysUntil}d"
+            }
+            "- ${item.displayName}: typical ₹${item.medianPaise / 100}, $cadence, last ${daysSince}d ago, $due"
+        }
+        return """
+            You help an Indian user understand "Likely due soon" predictions from their SMS debit history.
+            These are recurring merchants detected from past spends (not a bill inbox). Explain briefly why each looks upcoming.
+
+            Rules:
+            - Use ONLY the facts below. Do not invent merchants or amounts.
+            - Write 2–5 short sentences total, plain English, friendly and concrete.
+            - Mention cadence (weekly/monthly) and how overdue/due timing was inferred from last spend + median gap.
+            - If something looks like grocery/delivery rather than a fixed bill, say it may vary.
+
+            Merchants:
             $lines
         """.trimIndent()
     }

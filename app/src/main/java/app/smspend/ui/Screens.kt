@@ -119,9 +119,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.smspend.data.CategoryNoteEntity
 import app.smspend.data.CategorySpend
-import app.smspend.data.CategoryYtdTrend
+import app.smspend.data.CategoryWeekRank
 import app.smspend.data.SpendRepository
 import app.smspend.data.TransactionEntity
+import app.smspend.data.WeeklySpendTrend
 import app.smspend.data.WrongParseResult
 import app.smspend.domain.CategoryBucket
 import app.smspend.domain.SpendCategory
@@ -137,6 +138,7 @@ import app.smspend.ui.theme.PaperRaised
 import app.smspend.util.DateRanges
 import app.smspend.util.DueLabels
 import app.smspend.util.MonthWindow
+import app.smspend.util.WeekWindow
 import app.smspend.util.paiseToCompactRupees
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -147,6 +149,7 @@ import kotlin.math.roundToInt
 fun HomeScreen(
     viewModel: HomeViewModel,
     repo: SpendRepository,
+    hasApiKey: Boolean,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenTrends: () -> Unit,
@@ -268,6 +271,10 @@ fun HomeScreen(
                     priorMonthShortLabel = null,
                     monthlyBudgetPaise = if (state.segment == HomeSegment.TODAY) null else state.monthlyBudgetPaise,
                     expectedSoon = if (state.segment == HomeSegment.THIS_WEEK) state.expectedSoon else emptyList(),
+                    upcomingExplain = if (state.segment == HomeSegment.THIS_WEEK) state.upcomingExplain else null,
+                    upcomingExplainLoading = state.segment == HomeSegment.THIS_WEEK && state.upcomingExplainLoading,
+                    hasApiKey = hasApiKey,
+                    onExplainUpcoming = viewModel::explainUpcomingSpends,
                     onSync = { viewModel.syncThisPeriod() },
                     onRefresh = { viewModel.refresh(forceFullRange = false) },
                     onOpenCategory = { bucket ->
@@ -354,6 +361,10 @@ fun HomeScreen(
                                     priorMonthShortLabel = if (isSettled) state.priorMonthShortLabel else null,
                                     monthlyBudgetPaise = if (isSettled) state.monthlyBudgetPaise else null,
                                     expectedSoon = if (isSettled) state.expectedSoon else emptyList(),
+                                    upcomingExplain = if (isSettled) state.upcomingExplain else null,
+                                    upcomingExplainLoading = isSettled && state.upcomingExplainLoading,
+                                    hasApiKey = hasApiKey,
+                                    onExplainUpcoming = viewModel::explainUpcomingSpends,
                                     onSync = { viewModel.syncThisPeriod() },
                                     onRefresh = { viewModel.refresh(forceFullRange = false) },
                                     onOpenCategory = { bucket ->
@@ -389,6 +400,10 @@ fun HomeScreen(
                                 priorMonthShortLabel = if (isSettled) state.priorMonthShortLabel else null,
                                 monthlyBudgetPaise = if (isSettled) state.monthlyBudgetPaise else null,
                                 expectedSoon = if (isSettled) state.expectedSoon else emptyList(),
+                                upcomingExplain = if (isSettled) state.upcomingExplain else null,
+                                upcomingExplainLoading = isSettled && state.upcomingExplainLoading,
+                                hasApiKey = hasApiKey,
+                                onExplainUpcoming = viewModel::explainUpcomingSpends,
                                 onSync = { viewModel.syncThisPeriod() },
                                 onRefresh = { viewModel.refresh(forceFullRange = false) },
                                 onOpenCategory = { bucket ->
@@ -495,6 +510,10 @@ private fun PeriodSpendPage(
     priorMonthShortLabel: String?,
     monthlyBudgetPaise: Long?,
     expectedSoon: List<app.smspend.data.RecurringMerchantEntity>,
+    upcomingExplain: String?,
+    upcomingExplainLoading: Boolean,
+    hasApiKey: Boolean,
+    onExplainUpcoming: () -> Unit,
     onSync: () -> Unit,
     onRefresh: () -> Unit,
     onOpenCategory: (CategoryBucket) -> Unit,
@@ -512,6 +531,8 @@ private fun PeriodSpendPage(
     }
     val spendTotalPaise = spending.sumOf { it.totalPaise }
     val savedTotalPaise = saved.sumOf { it.totalPaise }
+    val savedFullWidth = saved.size < 2
+    val movesFullWidth = accountMoves.size < 2
 
     PullToRefreshBox(
         isRefreshing = scanning,
@@ -534,6 +555,7 @@ private fun PeriodSpendPage(
                 momPct = momPct,
                 priorMonthShortLabel = priorMonthShortLabel,
                 monthlyBudgetPaise = monthlyBudgetPaise,
+                statusMessage = message,
             )
             Spacer(modifier = Modifier.height(10.dp))
             Button(
@@ -563,12 +585,39 @@ private fun PeriodSpendPage(
                 }.take(3)
                 if (rows.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(10.dp))
-                    Text("Likely due soon", style = MaterialTheme.typography.labelMedium, color = Mute)
-                    Text(
-                        "Recurring merchants (~weekly/monthly)",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Mute,
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Likely due soon", style = MaterialTheme.typography.labelMedium, color = Mute)
+                            Text(
+                                "From your recurring spend pattern",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Mute,
+                            )
+                        }
+                        if (hasApiKey) {
+                            TextButton(
+                                onClick = onExplainUpcoming,
+                                enabled = !upcomingExplainLoading,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            ) {
+                                if (upcomingExplainLoading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MintDeep,
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Asking…", color = MintDeep, style = MaterialTheme.typography.labelLarge)
+                                } else {
+                                    Text("Why?", color = MintDeep, style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        }
+                    }
                     rows.forEach { line ->
                         Text(
                             line,
@@ -578,22 +627,27 @@ private fun PeriodSpendPage(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                }
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                "pull to rescan · Sync runs repair + categories",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Mute,
-            )
-            AnimatedVisibility(
-                visible = message != null,
-                enter = fadeIn(tween(100)) + slideInVertically(tween(100)) { it / 4 },
-                exit = fadeOut(tween(80)),
-            ) {
-                message?.let {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(it, color = MintDeep, style = MaterialTheme.typography.bodyMedium)
+                    AnimatedVisibility(
+                        visible = upcomingExplain != null,
+                        enter = fadeIn(tween(100)) + slideInVertically(tween(100)) { it / 4 },
+                        exit = fadeOut(tween(80)),
+                    ) {
+                        upcomingExplain?.let { text ->
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Mute,
+                            )
+                        }
+                    }
+                    if (!hasApiKey) {
+                        Text(
+                            "Add a Gemini key in Settings to ask why these are due.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Mute,
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
@@ -641,6 +695,7 @@ private fun PeriodSpendPage(
                                 cat = cat,
                                 weekTotalPaise = spendTotalPaise.coerceAtLeast(1),
                                 isSavings = false,
+                                fullWidth = false,
                                 iconName = iconNames[cat.bucket.key],
                                 enableSharedElement = enableSharedElement,
                                 onClick = { onOpenCategory(cat.bucket) },
@@ -666,20 +721,23 @@ private fun PeriodSpendPage(
                                     )
                                 }
                             }
-                            items(
-                                items = saved,
-                                key = { "save-${it.bucket.key}" },
-                            ) { cat ->
-                                CategoryTile(
-                                    cat = cat,
-                                    weekTotalPaise = savedTotalPaise.coerceAtLeast(1),
-                                    isSavings = true,
-                                    iconName = iconNames[cat.bucket.key],
-                                    enableSharedElement = enableSharedElement,
-                                    onClick = { onOpenCategory(cat.bucket) },
-                                    sharedTransitionScope = sharedTransitionScope,
-                                    animatedContentScope = animatedContentScope,
-                                )
+                            saved.forEach { cat ->
+                                item(
+                                    key = "save-${cat.bucket.key}",
+                                    span = { GridItemSpan(if (savedFullWidth) maxLineSpan else 1) },
+                                ) {
+                                    CategoryTile(
+                                        cat = cat,
+                                        weekTotalPaise = savedTotalPaise.coerceAtLeast(1),
+                                        isSavings = true,
+                                        fullWidth = savedFullWidth,
+                                        iconName = iconNames[cat.bucket.key],
+                                        enableSharedElement = enableSharedElement,
+                                        onClick = { onOpenCategory(cat.bucket) },
+                                        sharedTransitionScope = sharedTransitionScope,
+                                        animatedContentScope = animatedContentScope,
+                                    )
+                                }
                             }
                         }
                         if (accountMoves.isNotEmpty()) {
@@ -701,20 +759,23 @@ private fun PeriodSpendPage(
                                     )
                                 }
                             }
-                            items(
-                                items = accountMoves,
-                                key = { "move-${it.bucket.key}" },
-                            ) { cat ->
-                                CategoryTile(
-                                    cat = cat,
-                                    weekTotalPaise = movesTotal.coerceAtLeast(1),
-                                    isSavings = true,
-                                    iconName = iconNames[cat.bucket.key],
-                                    enableSharedElement = enableSharedElement,
-                                    onClick = { onOpenCategory(cat.bucket) },
-                                    sharedTransitionScope = sharedTransitionScope,
-                                    animatedContentScope = animatedContentScope,
-                                )
+                            accountMoves.forEach { cat ->
+                                item(
+                                    key = "move-${cat.bucket.key}",
+                                    span = { GridItemSpan(if (movesFullWidth) maxLineSpan else 1) },
+                                ) {
+                                    CategoryTile(
+                                        cat = cat,
+                                        weekTotalPaise = movesTotal.coerceAtLeast(1),
+                                        isSavings = true,
+                                        fullWidth = movesFullWidth,
+                                        iconName = iconNames[cat.bucket.key],
+                                        enableSharedElement = enableSharedElement,
+                                        onClick = { onOpenCategory(cat.bucket) },
+                                        sharedTransitionScope = sharedTransitionScope,
+                                        animatedContentScope = animatedContentScope,
+                                    )
+                                }
                             }
                         }
                     }
@@ -789,6 +850,7 @@ private fun CategoryTile(
     cat: CategorySpend,
     weekTotalPaise: Long,
     isSavings: Boolean,
+    fullWidth: Boolean,
     iconName: String?,
     enableSharedElement: Boolean,
     onClick: () -> Unit,
@@ -805,6 +867,8 @@ private fun CategoryTile(
     }
     val iconBg = accent.copy(alpha = 0.14f)
     val icon = CategoryIcons.forKey(cat.bucket.key, iconName)
+    val merchantLine = cat.merchants.take(if (fullWidth) 3 else 1).joinToString(" · ")
+        .ifBlank { "${cat.txnCount} txn${if (cat.txnCount == 1) "" else "s"}" }
 
     Column(
         modifier = Modifier
@@ -815,6 +879,76 @@ private fun CategoryTile(
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 10.dp),
     ) {
+        if (fullWidth) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(iconBg),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = cat.bucket.label,
+                        tint = accent,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        cat.bucket.label,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        merchantLine,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Mute,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        cat.totalPaise.paiseToCompactRupees(),
+                        fontWeight = FontWeight.SemiBold,
+                        color = amountColor,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                    )
+                    Text(
+                        "${cat.txnCount} txn${if (cat.txnCount == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Mute,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Ink.copy(alpha = 0.08f)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction = share.coerceAtLeast(0.03f))
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(barBrush),
+                )
+            }
+        } else {
         val headerBlock = @Composable { headerModifier: Modifier ->
             Row(
                 modifier = headerModifier,
@@ -872,8 +1006,7 @@ private fun CategoryTile(
             overflow = TextOverflow.Ellipsis,
         )
         Text(
-            cat.merchants.firstOrNull()
-                ?: "${cat.txnCount} txn${if (cat.txnCount == 1) "" else "s"}",
+            merchantLine,
             style = MaterialTheme.typography.bodyMedium,
             color = Mute,
             maxLines = 1,
@@ -895,6 +1028,7 @@ private fun CategoryTile(
                     .background(barBrush),
             )
         }
+        }
     }
 }
 
@@ -910,6 +1044,7 @@ private fun PeriodHero(
     momPct: Int?,
     priorMonthShortLabel: String?,
     monthlyBudgetPaise: Long?,
+    statusMessage: String? = null,
 ) {
     Box(
         modifier = Modifier
@@ -919,32 +1054,87 @@ private fun PeriodHero(
                 Brush.linearGradient(listOf(Mint.copy(alpha = 0.45f), PaperRaised)),
             )
             .border(1.dp, Line, RoundedCornerShape(22.dp))
-            .padding(18.dp),
+            .padding(16.dp),
     ) {
         Column {
-            Text(
-                title.uppercase(),
-                style = MaterialTheme.typography.labelMedium,
-                color = Mute,
-            )
-            Text(
-                "Spent",
-                style = MaterialTheme.typography.labelMedium,
-                color = Mute,
-            )
-            Text(
-                spendTotalPaise.paiseToCompactRupees(),
-                style = MaterialTheme.typography.displayLarge,
-                color = Debit,
-            )
-            momPct?.let { pct ->
-                val vs = priorMonthShortLabel?.let { "vs $it" } ?: "vs last month"
-                val label = when {
-                    pct > 0 -> "↑$pct% $vs"
-                    pct < 0 -> "↓${-pct}% $vs"
-                    else -> "Same as last month"
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        title.uppercase(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Mute,
+                    )
+                    Text(
+                        "Spent",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Mute,
+                    )
+                    Text(
+                        spendTotalPaise.paiseToCompactRupees(),
+                        style = MaterialTheme.typography.displayLarge,
+                        color = Debit,
+                    )
                 }
-                Text(label, style = MaterialTheme.typography.bodyMedium, color = MintDeep)
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 8.dp),
+                ) {
+                    momPct?.let { pct ->
+                        val vs = priorMonthShortLabel?.let { "vs $it" } ?: "vs last month"
+                        val label = when {
+                            pct > 0 -> "↑$pct% $vs"
+                            pct < 0 -> "↓${-pct}% $vs"
+                            else -> "Same as last month"
+                        }
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MintDeep,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Mute,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "scanned $lastSyncLabel",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Mute,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    statusMessage?.let { msg ->
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            msg,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MintDeep,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        "pull to rescan",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Mute.copy(alpha = 0.85f),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    )
+                }
             }
             monthlyBudgetPaise?.takeIf { it > 0 }?.let { budget ->
                 val left = budget - spendTotalPaise
@@ -964,33 +1154,28 @@ private fun PeriodHero(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(8.dp)
+                        .height(6.dp)
                         .clip(RoundedCornerShape(99.dp))
                         .background(Ink.copy(alpha = 0.08f)),
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(fraction = progress.coerceAtMost(1f).coerceAtLeast(0.03f))
-                            .height(8.dp)
+                            .height(6.dp)
                             .clip(RoundedCornerShape(99.dp))
                             .background(barColor),
                     )
                 }
             }
-            Text(
-                "$subtitle · scanned $lastSyncLabel",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Mute,
-            )
             if (savedTotalPaise > 0) {
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
                         .background(Ok.copy(alpha = 0.1f))
                         .border(1.dp, Ok.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1011,93 +1196,137 @@ private fun PeriodHero(
                 }
             }
             if (drawChart && spending.isNotEmpty() && spendTotalPaise > 0) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Text("Of spending", style = MaterialTheme.typography.labelMedium, color = Mute)
-                Spacer(modifier = Modifier.height(10.dp))
-                CategoryShareRing(categories = spending, totalPaise = spendTotalPaise)
+                Spacer(modifier = Modifier.height(8.dp))
+                CategorySpendDonut(categories = spending, totalPaise = spendTotalPaise)
             }
         }
     }
 }
 
+private data class DonutSlice(
+    val label: String,
+    val paise: Long,
+    val color: Color,
+)
+
 @Composable
-private fun CategoryShareRing(
+private fun CategorySpendDonut(
     categories: List<CategorySpend>,
     totalPaise: Long,
 ) {
+    val slices = remember(categories, totalPaise) {
+        if (totalPaise <= 0L) emptyList()
+        else {
+            val sorted = categories
+                .filter { it.totalPaise > 0 }
+                .sortedByDescending { it.totalPaise }
+            val top = sorted.take(4)
+            val otherPaise = sorted.drop(4).sumOf { it.totalPaise }
+            buildList {
+                top.forEach { cat ->
+                    add(
+                        DonutSlice(
+                            label = cat.bucket.label,
+                            paise = cat.totalPaise,
+                            color = CategoryColors.forKey(cat.bucket.key),
+                        ),
+                    )
+                }
+                if (otherPaise > 0) {
+                    add(
+                        DonutSlice(
+                            label = "Other",
+                            paise = otherPaise,
+                            color = Mute.copy(alpha = 0.55f),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+    val spendCount = remember(categories) { categories.sumOf { it.txnCount } }
+    if (slices.isEmpty()) return
+
     Row(
-        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier.size(120.dp),
+            modifier = Modifier.size(80.dp),
             contentAlignment = Alignment.Center,
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val stroke = 16.dp.toPx()
-                val diameter = size.minDimension - stroke
-                val topLeft = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
-                val arcSize = Size(diameter, diameter)
-                drawArc(
-                    color = Ink.copy(alpha = 0.08f),
-                    startAngle = -90f,
-                    sweepAngle = 360f,
-                    useCenter = false,
-                    topLeft = topLeft,
-                    size = arcSize,
-                    style = Stroke(width = stroke, cap = StrokeCap.Butt),
+                val stroke = Stroke(width = 12.dp.toPx(), cap = StrokeCap.Butt)
+                val diameter = size.minDimension - stroke.width
+                val topLeft = androidx.compose.ui.geometry.Offset(
+                    (size.width - diameter) / 2f,
+                    (size.height - diameter) / 2f,
                 )
+                val arcSize = androidx.compose.ui.geometry.Size(diameter, diameter)
                 var start = -90f
-                categories.forEach { cat ->
-                    val sweep = 360f * (cat.totalPaise.toFloat() / totalPaise.toFloat())
+                slices.forEach { slice ->
+                    val sweep = (slice.paise.toFloat() / totalPaise.toFloat()) * 360f
                     drawArc(
-                        color = CategoryColors.forKey(cat.bucket.key),
+                        color = slice.color,
                         startAngle = start,
-                        sweepAngle = sweep,
+                        sweepAngle = sweep.coerceAtLeast(0.5f),
                         useCenter = false,
                         topLeft = topLeft,
                         size = arcSize,
-                        style = Stroke(width = stroke, cap = StrokeCap.Butt),
+                        style = stroke,
                     )
                     start += sweep
                 }
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    "${categories.size}",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = Ink,
+                    "$spendCount",
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    color = Ink,
                 )
-                Text("spend", style = MaterialTheme.typography.labelMedium, color = Mute)
+                Text(
+                    "spend",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Mute,
+                )
             }
         }
-        Spacer(modifier = Modifier.width(16.dp))
+        Spacer(modifier = Modifier.width(12.dp))
         Column(
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier
-                .weight(1f)
-                .height(120.dp)
-                .verticalScroll(rememberScrollState()),
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            categories.forEach { cat ->
-                val pct = ((cat.totalPaise * 100.0) / totalPaise).roundToInt()
-                val color = CategoryColors.forKey(cat.bucket.key)
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            slices.forEach { slice ->
+                val pct = ((slice.paise.toDouble() / totalPaise.toDouble()) * 100.0)
+                    .roundToInt()
+                    .coerceAtLeast(1)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(color),
+                            .size(8.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(slice.color),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        "${cat.bucket.label} · $pct%",
-                        style = MaterialTheme.typography.bodyMedium,
+                        slice.label,
+                        style = MaterialTheme.typography.labelMedium,
                         color = Ink,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "$pct%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Mute,
+                        fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
@@ -2195,17 +2424,8 @@ fun TrendsScreen(
     onBack: () -> Unit,
     onOpenCategory: (CategoryBucket) -> Unit,
 ) {
-    val trends by viewModel.trends.collectAsStateWithLifecycle()
+    val weekly by viewModel.weekly.collectAsStateWithLifecycle()
     val iconNames by viewModel.iconNames.collectAsStateWithLifecycle()
-    val spending = remember(trends) {
-        trends.filter { SpendCategory.countsAsSpend(it.bucket.key) }
-    }
-    val saved = remember(trends) {
-        trends.filter { SpendCategory.countsAsSaved(it.bucket.key) }
-    }
-    val accountMoves = remember(trends) {
-        trends.filter { SpendCategory.isSelfTransfer(it.bucket.key) }
-    }
 
     Column(
         modifier = Modifier
@@ -2217,65 +2437,116 @@ fun TrendsScreen(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
             }
-            Text("Trends · this year", style = MaterialTheme.typography.titleLarge, color = Ink)
+            Text("Trends · week by week", style = MaterialTheme.typography.titleLarge, color = Ink)
         }
         Spacer(modifier = Modifier.height(8.dp))
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp),
+        when {
+            weekly == null -> {
+                Text(
+                    "Loading…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            }
+            weekly!!.ranks.isEmpty() -> {
+                Text(
+                    "No spend in the last 8 weeks yet",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            }
+            else -> {
+                val snap = weekly!!
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item(key = "chart") {
+                        WeeklySpendChartCard(snap = snap)
+                    }
+                    item(key = "top-hdr") {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Top spends · last 8 weeks", style = MaterialTheme.typography.titleMedium, color = Ink)
+                        Text(
+                            "This week vs last week",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Mute,
+                        )
+                    }
+                    items(snap.ranks, key = { it.bucket.key }) { rank ->
+                        TopSpendTrendCard(
+                            rank = rank,
+                            iconName = iconNames[rank.bucket.key],
+                            onClick = { onOpenCategory(rank.bucket) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WeeklySpendChartCard(snap: WeeklySpendTrend) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(PaperRaised)
+            .border(1.dp, Line, RoundedCornerShape(18.dp))
+            .padding(14.dp),
+    ) {
+        Text("Spend by week", style = MaterialTheme.typography.labelMedium, color = Mute)
+        Text(
+            snap.windowTotalPaise.paiseToCompactRupees(),
+            style = MaterialTheme.typography.headlineMedium,
+            color = Debit,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            "Last ${snap.weeks.size} weeks · debits only",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Mute,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        WeeklyStackedBars(snap = snap)
+        Spacer(modifier = Modifier.height(10.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (spending.isNotEmpty()) {
-                item {
-                    Text("Spending", style = MaterialTheme.typography.titleMedium, color = Ink)
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                items(spending, key = { "spend-${it.bucket.key}" }) { trend ->
-                    TrendRow(
-                        trend = trend,
-                        iconName = iconNames[trend.bucket.key],
-                        amountColor = Debit,
-                        onClick = { onOpenCategory(trend.bucket) },
+            snap.topKeys.forEach { key ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(CategoryColors.forKey(key)),
                     )
-                }
-            }
-            if (saved.isNotEmpty()) {
-                item {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("Saved & invested", style = MaterialTheme.typography.titleMedium, color = Ok)
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                items(saved, key = { "save-${it.bucket.key}" }) { trend ->
-                    TrendRow(
-                        trend = trend,
-                        iconName = iconNames[trend.bucket.key],
-                        amountColor = Ok,
-                        onClick = { onOpenCategory(trend.bucket) },
-                    )
-                }
-            }
-            if (accountMoves.isNotEmpty()) {
-                item {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("Account moves", style = MaterialTheme.typography.titleMedium, color = Mute)
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                items(accountMoves, key = { "move-${it.bucket.key}" }) { trend ->
-                    TrendRow(
-                        trend = trend,
-                        iconName = iconNames[trend.bucket.key],
-                        amountColor = Mute,
-                        onClick = { onOpenCategory(trend.bucket) },
-                    )
-                }
-            }
-            if (trends.isEmpty()) {
-                item {
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        "No category trends yet",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Mute,
-                        modifier = Modifier.padding(vertical = 24.dp),
+                        CategoryBucket.fromStored(key).label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                }
+            }
+            if (snap.otherByWeek.any { it > 0 }) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Mute.copy(alpha = 0.55f)),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Other", style = MaterialTheme.typography.labelMedium, color = Ink)
                 }
             }
         }
@@ -2283,19 +2554,91 @@ fun TrendsScreen(
 }
 
 @Composable
-private fun TrendRow(
-    trend: CategoryYtdTrend,
+private fun WeeklyStackedBars(snap: WeeklySpendTrend) {
+    val weekTotals = remember(snap) {
+        snap.weeks.indices.map { i ->
+            snap.topKeys.sumOf { key -> snap.series[key]?.getOrElse(i) { 0L } ?: 0L } +
+                snap.otherByWeek.getOrElse(i) { 0L }
+        }
+    }
+    val maxTotal = (weekTotals.maxOrNull() ?: 1L).coerceAtLeast(1L)
+    val otherColor = Mute.copy(alpha = 0.55f)
+
+    Column {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp),
+        ) {
+            val n = snap.weeks.size.coerceAtLeast(1)
+            val gap = 6.dp.toPx()
+            val barWidth = ((size.width - gap * (n - 1)) / n).coerceAtLeast(8.dp.toPx())
+            snap.weeks.indices.forEach { i ->
+                val x = i * (barWidth + gap)
+                var yBottom = size.height
+                val stack = buildList {
+                    snap.topKeys.forEach { key ->
+                        val v = snap.series[key]?.getOrElse(i) { 0L } ?: 0L
+                        if (v > 0) add(CategoryColors.forKey(key) to v)
+                    }
+                    val other = snap.otherByWeek.getOrElse(i) { 0L }
+                    if (other > 0) add(otherColor to other)
+                }
+                // Draw from bottom: Other first then smaller? Plan: stack top categories - typically largest at bottom or top. Draw in reverse so top keys appear lower to higher in list order from bottom.
+                stack.forEach { (color, paise) ->
+                    val h = (paise.toFloat() / maxTotal.toFloat()) * size.height
+                    drawRect(
+                        color = color,
+                        topLeft = androidx.compose.ui.geometry.Offset(x, yBottom - h),
+                        size = androidx.compose.ui.geometry.Size(barWidth, h.coerceAtLeast(1f)),
+                    )
+                    yBottom -= h
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            snap.weeks.forEach { week ->
+                Text(
+                    shortWeekLabel(week),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Mute,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
+private fun shortWeekLabel(week: WeekWindow): String = when (week.weeksAgo) {
+    0 -> "Now"
+    1 -> "Last"
+    else -> {
+        val fmt = java.text.SimpleDateFormat("d", java.util.Locale.getDefault())
+        fmt.format(week.startMs)
+    }
+}
+
+@Composable
+private fun TopSpendTrendCard(
+    rank: CategoryWeekRank,
     iconName: String?,
-    amountColor: Color,
     onClick: () -> Unit,
 ) {
-    val accent = CategoryColors.forKey(trend.bucket.key)
-    val icon = CategoryIcons.forKey(trend.bucket.key, iconName)
+    val accent = CategoryColors.forKey(rank.bucket.key)
+    val icon = CategoryIcons.forKey(rank.bucket.key, iconName)
+    val wow = wowLabel(rank.thisWeekPaise, rank.lastWeekPaise)
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PaperRaised)
+            .border(1.dp, Line, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 12.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -2310,30 +2653,49 @@ private fun TrendRow(
             ) {
                 Icon(
                     imageVector = icon,
-                    contentDescription = trend.bucket.label,
+                    contentDescription = rank.bucket.label,
                     tint = accent,
                     modifier = Modifier.size(22.dp),
                 )
             }
             Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    rank.bucket.label,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    wow,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = when {
+                        rank.lastWeekPaise <= 0L && rank.thisWeekPaise > 0L -> MintDeep
+                        rank.thisWeekPaise > rank.lastWeekPaise -> Debit
+                        rank.thisWeekPaise < rank.lastWeekPaise -> Ok
+                        else -> Mute
+                    },
+                )
+            }
             Text(
-                trend.bucket.label,
+                rank.totalPaise.paiseToCompactRupees(),
                 fontWeight = FontWeight.SemiBold,
-                color = Ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                trend.ytdTotalPaise.paiseToCompactRupees(),
-                fontWeight = FontWeight.SemiBold,
-                color = amountColor,
+                color = Debit,
             )
         }
-        if (trend.monthTotals.size >= 2) {
-            Spacer(modifier = Modifier.height(8.dp))
-            CategorySparkline(values = trend.monthTotals, color = accent)
-        }
+    }
+}
+
+private fun wowLabel(thisWeek: Long, lastWeek: Long): String = when {
+    lastWeek <= 0L && thisWeek <= 0L -> "No spend this or last week"
+    lastWeek <= 0L && thisWeek > 0L -> "New this week · ${thisWeek.paiseToCompactRupees()}"
+    thisWeek == lastWeek -> "Same as last week"
+    else -> {
+        val pct = (((thisWeek - lastWeek).toDouble() / lastWeek.toDouble()) * 100.0)
+            .roundToInt()
+        val arrow = if (pct > 0) "↑" else "↓"
+        "$arrow${kotlin.math.abs(pct)}% vs last week"
     }
 }
 
@@ -2372,11 +2734,16 @@ fun MyBanksSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var query by remember { mutableStateOf("") }
-    val banks = remember(query) {
-        app.smspend.domain.IndianBanks.ALL.filter {
-            query.isBlank() || it.label.contains(query, ignoreCase = true)
-        }
+    val banks = remember(query, selectedIds, detectedIds) {
+        app.smspend.domain.IndianBanks.ALL
+            .filter { query.isBlank() || it.label.contains(query, ignoreCase = true) }
+            .sortedWith(
+                compareByDescending<app.smspend.domain.IndianBank> { it.id in selectedIds }
+                    .thenByDescending { it.id in detectedIds }
+                    .thenBy { it.label.lowercase() },
+            )
     }
+    val selectedCount = banks.count { it.id in selectedIds }
     ModalBottomSheet(
         onDismissRequest = onSkip,
         sheetState = sheetState,
@@ -2404,21 +2771,52 @@ fun MyBanksSheet(
             )
             Spacer(modifier = Modifier.height(8.dp))
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(banks, key = { it.id }) { bank ->
+                if (selectedCount > 0 && query.isBlank()) {
+                    item(key = "hdr-selected") {
+                        Text(
+                            "Selected · $selectedCount",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MintDeep,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
+                }
+                items(
+                    count = banks.size,
+                    key = { banks[it].id },
+                ) { index ->
+                    val bank = banks[index]
                     val checked = bank.id in selectedIds
                     val detected = bank.id in detectedIds
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onToggle(bank.id) }
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(checked = checked, onCheckedChange = { onToggle(bank.id) })
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(bank.label, color = Ink, fontWeight = FontWeight.SemiBold)
-                            if (detected) {
-                                Text("Seen in SMS", style = MaterialTheme.typography.bodyMedium, color = MintDeep)
+                    val showOtherHeader = query.isBlank() &&
+                        selectedCount > 0 &&
+                        index == selectedCount
+                    Column {
+                        if (showOtherHeader) {
+                            Text(
+                                "Other banks",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Mute,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggle(bank.id) }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = checked, onCheckedChange = { onToggle(bank.id) })
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(bank.label, color = Ink, fontWeight = FontWeight.SemiBold)
+                                if (detected) {
+                                    Text(
+                                        "Seen in SMS",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MintDeep,
+                                    )
+                                }
                             }
                         }
                     }

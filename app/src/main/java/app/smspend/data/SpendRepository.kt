@@ -6,6 +6,7 @@ import app.smspend.domain.RecurringDetector
 import app.smspend.domain.SpendCategory
 import app.smspend.notify.SmSpendNotifications
 import app.smspend.util.DateRanges
+import app.smspend.util.WeekWindow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -72,6 +73,7 @@ sealed class WrongParseResult {
 }
 
 data class WidgetSnapshot(
+    val todaySpendPaise: Long,
     val monthSpendPaise: Long,
     val budgetPaise: Long?,
     val topCategories: List<Pair<String, Long>>,
@@ -82,6 +84,24 @@ data class CategoryYtdTrend(
     val monthTotals: List<Long>,
     val ytdTotalPaise: Long,
 )
+
+data class CategoryWeekRank(
+    val bucket: CategoryBucket,
+    val totalPaise: Long,
+    val thisWeekPaise: Long,
+    val lastWeekPaise: Long,
+)
+
+data class WeeklySpendTrend(
+    val weeks: List<WeekWindow>,
+    val topKeys: List<String>,
+    val series: Map<String, List<Long>>,
+    val otherByWeek: List<Long>,
+    val ranks: List<CategoryWeekRank>,
+) {
+    val windowTotalPaise: Long
+        get() = ranks.sumOf { it.totalPaise }
+}
 
 class SpendRepository(
     private val db: SmSpendDatabase,
@@ -250,9 +270,85 @@ class SpendRepository(
         }.sortedByDescending { it.ytdTotalPaise }
     }
 
+    /**
+     * Last [DateRanges.HOME_WEEK_COUNT] weeks of spend-only totals for Trends:
+     * top 4 categories (+ Other) series for a stacked chart, and ranked cards with WoW.
+     */
+    suspend fun weeklySpendTrend(): WeeklySpendTrend {
+        val weeks = DateRanges.homeWeeks()
+        if (weeks.isEmpty()) {
+            return WeeklySpendTrend(
+                weeks = emptyList(),
+                topKeys = emptyList(),
+                series = emptyMap(),
+                otherByWeek = emptyList(),
+                ranks = emptyList(),
+            )
+        }
+        val from = weeks.first().startMs
+        val to = DateRanges.endExclusiveNow()
+        val spendTxs = txDao.listInRange(from, to)
+            .filter { SpendCategory.countsAsSpend(normalizeCategoryKey(it.category)) }
+
+        val weekCount = weeks.size
+        val byCatWeek = mutableMapOf<String, LongArray>()
+        for (tx in spendTxs) {
+            val key = normalizeCategoryKey(tx.category)
+            val weekIndex = weeks.indexOfFirst { w ->
+                tx.occurredAt >= w.startMs && tx.occurredAt < w.endExclusiveMs
+            }
+            if (weekIndex < 0) continue
+            val arr = byCatWeek.getOrPut(key) { LongArray(weekCount) }
+            arr[weekIndex] += tx.amountPaise
+        }
+
+        val rankedKeys = byCatWeek.entries
+            .map { (key, arr) -> key to arr.sum() }
+            .sortedByDescending { it.second }
+            .map { it.first }
+
+        val topKeys = rankedKeys.take(4)
+        val topSet = topKeys.toSet()
+        val series = topKeys.associateWith { key ->
+            byCatWeek[key]?.toList() ?: List(weekCount) { 0L }
+        }
+        val otherByWeek = LongArray(weekCount)
+        for ((key, arr) in byCatWeek) {
+            if (key in topSet) continue
+            for (i in 0 until weekCount) otherByWeek[i] += arr[i]
+        }
+
+        val thisIdx = weekCount - 1
+        val lastIdx = (weekCount - 2).coerceAtLeast(0)
+        val ranks = rankedKeys.map { key ->
+            val arr = byCatWeek[key]!!
+            CategoryWeekRank(
+                bucket = CategoryBucket.fromStored(key),
+                totalPaise = arr.sum(),
+                thisWeekPaise = arr.getOrElse(thisIdx) { 0L },
+                lastWeekPaise = if (weekCount >= 2) arr.getOrElse(lastIdx) { 0L } else 0L,
+            )
+        }
+
+        return WeeklySpendTrend(
+            weeks = weeks,
+            topKeys = topKeys,
+            series = series,
+            otherByWeek = otherByWeek.toList(),
+            ranks = ranks,
+        )
+    }
+
     suspend fun widgetSnapshot(): WidgetSnapshot {
         val month = DateRanges.monthWindow(0)
-        val cats = txDao.listInRange(month.startMs, DateRanges.endExclusiveNow())
+        val (todayStart, todayEnd) = DateRanges.todayWindow()
+        val nowEnd = DateRanges.endExclusiveNow()
+        val monthTxs = txDao.listInRange(month.startMs, nowEnd)
+        val todayTxs = monthTxs.filter { it.occurredAt in todayStart until todayEnd }
+        fun spendTotal(txs: List<TransactionEntity>): Long =
+            txs.filter { SpendCategory.countsAsSpend(normalizeCategoryKey(it.category)) }
+                .sumOf { it.amountPaise }
+        val cats = monthTxs
             .groupBy { normalizeCategoryKey(it.category) }
             .map { (key, txs) ->
                 CategorySpend(
@@ -265,6 +361,7 @@ class SpendRepository(
         val spending = cats.filter { SpendCategory.countsAsSpend(it.bucket.key) }
             .sortedByDescending { it.totalPaise }
         return WidgetSnapshot(
+            todaySpendPaise = spendTotal(todayTxs),
             monthSpendPaise = spending.sumOf { it.totalPaise },
             budgetPaise = prefs.monthlyBudgetPaise.first(),
             topCategories = spending.take(2).map { it.bucket.label to it.totalPaise },
@@ -336,6 +433,28 @@ class SpendRepository(
     suspend fun lastSyncAt(): Long = syncDao.get()?.lastSyncAtMs ?: 0L
 
     suspend fun validateApiKey(apiKey: String): GeminiKeyCheck = gemini.validateApiKey(apiKey)
+
+    suspend fun explainUpcomingSpends(
+        items: List<RecurringMerchantEntity>,
+    ): String {
+        val apiKey = prefs.geminiApiKey.first()
+        if (apiKey.isBlank()) {
+            throw IllegalStateException("Add a Gemini API key in Settings first")
+        }
+        val hints = items.map {
+            UpcomingSpendHint(
+                displayName = it.displayName,
+                medianPaise = it.medianPaise,
+                cadenceDays = it.cadenceDays,
+                lastOccurredAt = it.lastOccurredAt,
+                nextExpectedAt = it.nextExpectedAt,
+            )
+        }
+        return when (val result = gemini.explainUpcomingSpends(apiKey, hints)) {
+            is GeminiResult.Success -> result.text.trim()
+            is GeminiResult.Failure -> throw IllegalStateException(result.message)
+        }
+    }
 
     suspend fun scanInbox(
         forceFullMonth: Boolean = false,
