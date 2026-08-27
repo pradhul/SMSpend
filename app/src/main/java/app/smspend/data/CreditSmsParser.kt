@@ -9,14 +9,17 @@ data class ParsedCredit(
     val amountPaise: Long,
     val upiRef: String?,
     val bankId: String?,
+    val merchantRaw: String,
+    val merchantKey: String,
     val bodySnippet: String,
     val sender: String,
     val occurredAt: Long,
 )
 
 /**
- * Parse inbound credit SMS for multi-bank self-transfer pairing.
- * Credits are never stored as spend; they only confirm a debit is a self move.
+ * Parse inbound credit SMS (money *to* an account). Stored as CREDIT transactions
+ * (CREDITS category) when the credited bank is in My banks; also used for
+ * multi-bank self-transfer pairing.
  */
 object CreditSmsParser {
     private val amountPattern = Pattern.compile(
@@ -45,12 +48,19 @@ object CreditSmsParser {
         if (debitHints.any { lower.contains(it) } && !lower.contains("credited") && !lower.contains("received")) {
             return null
         }
+        // Outbound NEFT "credited to <payee>" is a debit confirmation, not inbound credit.
+        if (SmsDebitParser.isNeftCreditedToPayee(body)) return null
         val amount = extractAmountPaise(body) ?: return null
         val bank = IndianBanks.matchSender(sender)
+        val merchantRaw = SmsDebitParser.extractMerchant(body)
+            ?: bank?.label
+            ?: sender.ifBlank { "Credit" }
         return ParsedCredit(
             amountPaise = amount,
             upiRef = extractUpiRef(body),
             bankId = bank?.id,
+            merchantRaw = merchantRaw.trim().take(80),
+            merchantKey = SmsDebitParser.normalizeMerchantKey(merchantRaw),
             bodySnippet = body.take(180),
             sender = sender,
             occurredAt = occurredAt,
@@ -69,6 +79,7 @@ object CreditSmsParser {
      * Mark debit transaction IDs that pair with a credit on another declared bank.
      * Tier A: shared UPI ref within [refWindowMs].
      * Tier B: same amount within [amountWindowMs] when credit has no ref (Federal-style).
+     * Returns debitId to note, plus the credit index used (for marking stored credits).
      */
     fun selfTransferDebitIds(
         debits: List<TransactionEntity>,
@@ -77,8 +88,25 @@ object CreditSmsParser {
         refWindowMs: Long = SmsDebitParser.SELF_TRANSFER_PAIR_WINDOW_MS,
         amountWindowMs: Long = SmsDebitParser.SELF_TRANSFER_FEDERAL_WINDOW_MS,
     ): List<Pair<Long, String>> {
+        return selfTransferPairs(debits, credits, declaredBankIds, refWindowMs, amountWindowMs)
+            .map { (debitId, note, _) -> debitId to note }
+    }
+
+    data class SelfTransferPair(
+        val debitId: Long,
+        val note: String,
+        val creditIndex: Int,
+    )
+
+    fun selfTransferPairs(
+        debits: List<TransactionEntity>,
+        credits: List<ParsedCredit>,
+        declaredBankIds: Set<String>,
+        refWindowMs: Long = SmsDebitParser.SELF_TRANSFER_PAIR_WINDOW_MS,
+        amountWindowMs: Long = SmsDebitParser.SELF_TRANSFER_FEDERAL_WINDOW_MS,
+    ): List<SelfTransferPair> {
         if (declaredBankIds.isEmpty() || credits.isEmpty()) return emptyList()
-        val out = mutableListOf<Pair<Long, String>>()
+        val out = mutableListOf<SelfTransferPair>()
         val usedCredits = mutableSetOf<Int>()
         for (debit in debits.sortedBy { it.occurredAt }) {
             val debitBank = IndianBanks.matchSender(debit.sender)?.id
@@ -109,7 +137,11 @@ object CreditSmsParser {
             }
             val idx = bestIdx ?: continue
             usedCredits += idx
-            out += debit.id to (bestNote ?: "Paired")
+            out += SelfTransferPair(
+                debitId = debit.id,
+                note = bestNote ?: "Paired",
+                creditIndex = idx,
+            )
         }
         return out
     }

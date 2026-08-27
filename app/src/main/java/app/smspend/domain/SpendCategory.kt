@@ -15,11 +15,12 @@ enum class SpendCategory(val label: String) {
     TRANSFERS("Transfers"),
     WITHDRAWALS("Withdrawals"),
     SELF_TRANSFER("Self transfer"),
+    CREDITS("Credits"),
     OTHER("Other");
 
-    /** False for money set aside or moved between own accounts — not consumption spend. */
+    /** False for money set aside, own-account moves, or inbound credits — not consumption spend. */
     val countsAsSpend: Boolean
-        get() = this != SAVINGS && this != SELF_TRANSFER
+        get() = this != SAVINGS && this != SELF_TRANSFER && this != CREDITS
 
     /** True only for real savings/investments — not self transfers that fund them. */
     val countsAsSaved: Boolean
@@ -39,6 +40,7 @@ enum class SpendCategory(val label: String) {
             "SELF-TRANSFER" to SELF_TRANSFER,
             "WITHDRAWAL" to WITHDRAWALS,
             "ATM" to WITHDRAWALS,
+            "CREDIT" to CREDITS,
         )
 
         fun countsAsSpend(storedKey: String): Boolean {
@@ -53,6 +55,9 @@ enum class SpendCategory(val label: String) {
 
         fun isSelfTransfer(storedKey: String): Boolean =
             !isCustomKey(storedKey) && fromStored(storedKey) == SELF_TRANSFER
+
+        fun isCredits(storedKey: String): Boolean =
+            !isCustomKey(storedKey) && fromStored(storedKey) == CREDITS
 
         fun fromLabel(label: String): SpendCategory {
             val trimmed = label.trim()

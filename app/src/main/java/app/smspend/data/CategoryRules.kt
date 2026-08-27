@@ -33,8 +33,6 @@ object CategoryRules {
         ),
         Rule(
             listOf(
-                "autopay si",
-                "si-tad",
                 " standing instruction",
                 "emi ",
                 " loan emi",
@@ -79,7 +77,7 @@ object CategoryRules {
                 "liquors",
                 "wine shop",
                 "beer",
-                "bar ",
+                " bar ",
                 "pub ",
                 "distillery",
                 "spotify",
@@ -142,6 +140,9 @@ object CategoryRules {
                 "meesho",
                 "nykaa",
                 "jewellery",
+                "jewelry",
+                "khazana",
+                "malabar gold",
                 "zudio",
                 "cosmetics",
                 "stationary",
@@ -186,6 +187,8 @@ object CategoryRules {
                 "neft txn",
                 "neft",
                 "imps to",
+                "imps ",
+                "rtgs",
                 "money transfer via",
                 "for money transfer",
             ),
@@ -193,8 +196,53 @@ object CategoryRules {
         ),
     )
 
+    private val transferChannelNeedles = listOf(
+        "neft txn",
+        "neft",
+        "imps to",
+        "imps ",
+        "rtgs",
+        "money transfer via",
+        "for money transfer",
+        "online banking",
+    )
+
+    private val jewelleryNeedles = listOf(
+        "jewellery",
+        "jewelry",
+        "khazana",
+        "malabar gold",
+    )
+
     fun match(merchantKey: String, merchantRaw: String, body: String): SpendCategory? {
-        val hay = "$merchantKey $merchantRaw $body".lowercase()
+        val hay = haystack(merchantKey, merchantRaw, body)
         return rules.firstOrNull { rule -> rule.needles.any { hay.contains(it) } }?.category
     }
+
+    /**
+     * Categories that must win over sticky [merchant_memory] (ATM, RD/investments,
+     * opaque NEFT/IMPS, self-name, jewellery misfiled as savings).
+     */
+    fun beatsMemory(
+        resolved: SpendCategory,
+        merchantKey: String,
+        merchantRaw: String,
+        body: String,
+    ): Boolean {
+        val hay = haystack(merchantKey, merchantRaw, body)
+        return when (resolved) {
+            SpendCategory.WITHDRAWALS,
+            SpendCategory.SAVINGS,
+            SpendCategory.SELF_TRANSFER,
+            -> true
+            SpendCategory.TRANSFERS ->
+                transferChannelNeedles.any { hay.contains(it) }
+            SpendCategory.SHOPPING ->
+                jewelleryNeedles.any { hay.contains(it) }
+            else -> false
+        }
+    }
+
+    private fun haystack(merchantKey: String, merchantRaw: String, body: String): String =
+        "$merchantKey $merchantRaw $body".lowercase()
 }

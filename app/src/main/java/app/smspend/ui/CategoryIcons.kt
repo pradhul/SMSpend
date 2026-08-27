@@ -109,6 +109,7 @@ object CategoryIcons {
         SpendCategory.TRANSFERS -> Icons.Outlined.SwapHoriz
         SpendCategory.WITHDRAWALS -> Icons.Outlined.AccountBalanceWallet
         SpendCategory.SELF_TRANSFER -> Icons.Outlined.AccountBalance
+        SpendCategory.CREDITS -> Icons.Outlined.AccountBalanceWallet
         SpendCategory.OTHER -> Fallback
     }
 }

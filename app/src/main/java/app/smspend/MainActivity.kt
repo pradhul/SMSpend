@@ -187,8 +187,10 @@ private fun SmSpendNav(
                 val vm: TrendsViewModel = viewModel(
                     factory = TrendsViewModel.Factory(app.repository),
                 )
+                val apiKey by app.prefs.geminiApiKey.collectAsStateWithLifecycle(initialValue = "")
                 TrendsScreen(
                     viewModel = vm,
+                    hasApiKey = apiKey.isNotBlank(),
                     onBack = { nav.popBackStack() },
                     onOpenCategory = { bucket ->
                         val month = DateRanges.monthWindow(0)

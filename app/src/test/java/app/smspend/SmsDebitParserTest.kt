@@ -2,6 +2,7 @@ package app.smspend
 
 import app.smspend.data.CategoryRules
 import app.smspend.data.SmsDebitParser
+import app.smspend.data.TransactionEntity
 import app.smspend.domain.SpendCategory
 import app.smspend.util.paiseToCompactRupees
 import org.junit.Assert.assertEquals
@@ -61,16 +62,15 @@ class SmsDebitParserTest {
     }
 
     @Test
-    fun parsesAutopaySi() {
+    fun parsesAutopaySiAsCardBillPayment() {
         val body =
             "UPDATE: INR 8,528.00 debited from HDFC Bank XX8002 on 05-AUG-26. Info: DC 1019060032735517 Autopay SI-TAD. Avl bal:INR 71,152.50"
         val parsed = SmsDebitParser.parse(body, "VK-HDFCBK")
         assertNotNull(parsed)
         assertEquals(852_800L, parsed!!.amountPaise)
-        assertEquals(
-            SpendCategory.EMI,
-            CategoryRules.match(parsed.merchantKey, parsed.merchantRaw, body),
-        )
+        assertTrue(SmsDebitParser.isCardBillPayment(body, parsed.merchantRaw))
+        // Card autopay is excluded from EMI rules so it is not double-counted as spend.
+        assertNull(CategoryRules.match(parsed.merchantKey, parsed.merchantRaw, body))
     }
 
     @Test
@@ -198,15 +198,15 @@ class SmsDebitParserTest {
         val body =
             "PAYMENT ALERT! INR 40000.00 deducted from HDFC Bank A/C No 8002 towards Groww UMRN: HDFC7021201210008279"
         assertNull(SmsDebitParser.extractTxnRef(body))
-        val key = SmsDebitParser.dedupKey(body, 4_000_000L)
+        val key = SmsDebitParser.dedupKey(body, 4_000_000L, dateMs = 1_000_000L)
         assertTrue(key.startsWith("body:"))
     }
 
     @Test
     fun dedupKeySameForDuplicateBodies() {
         val body = "Rs 250.00 debited from A/c XX1234 for UPI to CHAI POINT. Ref 998877665544."
-        val a = SmsDebitParser.dedupKey(body, 25_000L)
-        val b = SmsDebitParser.dedupKey("  $body  ", 25_000L)
+        val a = SmsDebitParser.dedupKey(body, 25_000L, dateMs = 1_000L)
+        val b = SmsDebitParser.dedupKey("  $body  ", 25_000L, dateMs = 9_999_999L)
         assertEquals(a, b)
         assertTrue(a.startsWith("ref:998877665544:"))
     }
@@ -216,12 +216,106 @@ class SmsDebitParserTest {
         val a = SmsDebitParser.dedupKey(
             "Rs 100.00 debited to FOO. Ref 111111111111",
             10_000L,
+            dateMs = 1_000L,
         )
         val b = SmsDebitParser.dedupKey(
             "Rs 100.00 debited to FOO. Ref 222222222222",
             10_000L,
+            dateMs = 1_000L,
         )
         assertTrue(a != b)
+    }
+
+    @Test
+    fun dedupKeyNoRefSameMinuteCollapses() {
+        val body =
+            "Amt Deducted! Rs.5000 from your HDFC Bank A/c XX7660 for NEFT txn via HDFC Bank Online Banking"
+        val t = 1_752_000_000_000L
+        val a = SmsDebitParser.dedupKey(body, 500_000L, t)
+        val b = SmsDebitParser.dedupKey(body, 500_000L, t + 30_000L)
+        assertEquals(a, b)
+        assertTrue(a.startsWith("body:"))
+    }
+
+    @Test
+    fun dedupKeyNoRefDifferentMinutesDiffer() {
+        val body =
+            "Amt Deducted! Rs.5000 from your HDFC Bank A/c XX7660 for NEFT txn via HDFC Bank Online Banking"
+        val day1 = 1_752_000_000_000L
+        val dayLater = day1 + 24L * 60 * 60 * 1000
+        val a = SmsDebitParser.dedupKey(body, 500_000L, day1)
+        val b = SmsDebitParser.dedupKey(body, 500_000L, dayLater)
+        assertTrue(a != b)
+    }
+
+    @Test
+    fun parsesNeftCreditedToPayee() {
+        val body =
+            "HDFC Bank : NEFT money transfer Txn No HDFCH01164497754 for Rs INR 5,000.00 has been credited to AMMA SBI on 01-08-2026 at 23:01:31"
+        val parsed = SmsDebitParser.parse(body, "VM-HDFCBK-S")
+        assertNotNull(parsed)
+        assertEquals(500_000L, parsed!!.amountPaise)
+        assertEquals("AMMA SBI", parsed.merchantRaw)
+        assertEquals("amma sbi", parsed.merchantKey)
+        assertEquals("HDFCH01164497754", SmsDebitParser.extractTxnRef(body))
+        val key = SmsDebitParser.dedupKey(body, parsed.amountPaise, dateMs = 1L)
+        assertTrue(key.startsWith("ref:HDFCH01164497754:"))
+        assertEquals(
+            SpendCategory.TRANSFERS,
+            CategoryRules.match(parsed.merchantKey, parsed.merchantRaw, body),
+        )
+    }
+
+    @Test
+    fun rejectsInboundCreditedToYourAccount() {
+        val body =
+            "HDFC Bank : NEFT money transfer Txn No HDFCH999 for Rs INR 1,000.00 has been credited to your A/c XX7660 on 01-08-2026"
+        assertNull(SmsDebitParser.parse(body, "VM-HDFCBK-S"))
+        assertNull(SmsDebitParser.parseNeftCreditedToPayee(body))
+    }
+
+    @Test
+    fun opaqueNeftLegCollapsedWhenNamedExists() {
+        val opaqueBody =
+            "Amt Deducted! Rs.5000 from your HDFC Bank A/c XX7660 for NEFT txn via HDFC Bank Online Banking"
+        val namedBody =
+            "HDFC Bank : NEFT money transfer Txn No HDFCH01164497754 for Rs INR 5,000.00 has been credited to AMMA SBI on 01-08-2026 at 23:01:31"
+        val t = 1_752_000_000_000L
+        val opaque = app.smspend.data.CrossSourcePoint(
+            id = 1,
+            amountPaise = 500_000L,
+            occurredAt = t,
+            merchantKey = "bank transfer",
+            isBank = true,
+            bodySnippet = opaqueBody,
+        )
+        val named = app.smspend.data.CrossSourcePoint(
+            id = 2,
+            amountPaise = 500_000L,
+            occurredAt = t + 60_000L,
+            merchantKey = "amma sbi",
+            isBank = true,
+            bodySnippet = namedBody,
+        )
+        assertEquals(
+            listOf(1L),
+            SmsDebitParser.opaqueNeftLegDuplicateIds(listOf(opaque, named)),
+        )
+    }
+
+    @Test
+    fun opaqueNeftLegKeptWhenNoNamedMatch() {
+        val opaqueBody =
+            "Amt Deducted! Rs.15000 from your HDFC Bank A/c XX7660 for NEFT txn via HDFC Bank Online Banking"
+        val opaque = app.smspend.data.CrossSourcePoint(
+            id = 1,
+            amountPaise = 1_500_000L,
+            occurredAt = 1_752_000_000_000L,
+            merchantKey = "bank transfer",
+            isBank = true,
+            bodySnippet = opaqueBody,
+        )
+        assertTrue(SmsDebitParser.opaqueNeftLegDuplicateIds(listOf(opaque)).isEmpty())
     }
 
     @Test
@@ -260,6 +354,93 @@ class SmsDebitParserTest {
                 "VM-PHONEPE",
             ),
         )
+    }
+
+    @Test
+    fun isCardBillPayment_matchesAutopayAndRails() {
+        assertTrue(
+            SmsDebitParser.isCardBillPayment(
+                "INR 12,345.00 debited from A/c XX7660 towards HDFC Bank CreditCard Autopay SI-TAD",
+                "HDFC Bank CreditCard",
+            ),
+        )
+        assertTrue(
+            SmsDebitParser.isCardBillPayment(
+                "Sent Rs.5000.00 From HDFC Bank A/C *7660 To CRED Club On 01/08/26",
+                "CRED Club",
+            ),
+        )
+        assertTrue(
+            SmsDebitParser.isCardBillPayment(
+                "Rs.8000 debited via BillDesk for credit card payment",
+                "BillDesk",
+            ),
+        )
+    }
+
+    @Test
+    fun isCardBillPayment_doesNotMatchCardSpendSms() {
+        val spend =
+            "Spent Rs.2250.73 On HDFC Bank Card 4062 At CURSOR, AI POWERED IDE On 2026-08-08:13:16:51.Not You? To Block+Reissue Call 18002586161/SMS BLOCK CC 4062 to 7308080808"
+        assertFalse(SmsDebitParser.isCardBillPayment(spend, "CURSOR"))
+        val parsed = SmsDebitParser.parse(spend, "AD-HDFCBK-S")
+        assertNotNull(parsed)
+        assertEquals("Card ·4062", SmsDebitParser.cardSpendTag(spend, "CURSOR"))
+    }
+
+    @Test
+    fun cardSpendTag_fallbackWithoutLast4() {
+        val body = "Spent Rs.500 on your card at AMAZON PAY India"
+        assertEquals("Card spend", SmsDebitParser.cardSpendTag(body))
+    }
+
+    @Test
+    fun cardSpendTag_nullForBillPayment() {
+        assertEquals(
+            null,
+            SmsDebitParser.cardSpendTag("Rs.8000 debited via BillDesk for credit card payment"),
+        )
+    }
+
+    @Test
+    fun extractCardLast4_fromSpentSms() {
+        val spend =
+            "Spent Rs.2250.73 On HDFC Bank Card 4062 At CURSOR, AI POWERED IDE On 2026-08-08:13:16:51.Not You? To Block+Reissue Call 18002586161/SMS BLOCK CC 4062 to 7308080808"
+        assertEquals("4062", SmsDebitParser.extractCardLast4(spend))
+    }
+
+    @Test
+    fun extractCardLast4_unknownWhenLast4Missing() {
+        val body = "Spent Rs.500 on your card at AMAZON PAY India"
+        assertEquals(TransactionEntity.CARD_LAST4_UNKNOWN, SmsDebitParser.extractCardLast4(body))
+    }
+
+    @Test
+    fun directionalDedupKey_separatesCreditAndDebit() {
+        val body = "Rs 250.00 debited to FOO. Ref 998877665544."
+        val debit = SmsDebitParser.directionalDedupKey(body, 25_000L, 1_000L, isCredit = false)
+        val credit = SmsDebitParser.directionalDedupKey(body, 25_000L, 1_000L, isCredit = true)
+        assertTrue(debit.startsWith("DEBIT:"))
+        assertTrue(credit.startsWith("CREDIT:"))
+        assertTrue(debit != credit)
+    }
+
+    @Test
+    fun cardPaymentNoteExcludedFromTotals() {
+        val tx = TransactionEntity(
+            id = 1,
+            smsId = 1,
+            amountPaise = 10_000,
+            merchantRaw = "HDFC CreditCard",
+            merchantKey = "hdfc creditcard",
+            category = "BILLS",
+            occurredAt = 1L,
+            bodySnippet = "credit card autopay",
+            sender = "AD-HDFCBK-S",
+            statusTag = SmsDebitParser.CARD_PAYMENT_NOTE,
+        )
+        assertTrue(tx.isCardBillPaymentNote())
+        assertFalse(tx.countsTowardTotals())
     }
 
     @Test

@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import app.smspend.data.CategoryNoteEntity
 import app.smspend.data.CategorySpend
+import app.smspend.data.DiagLog
 import app.smspend.data.GeminiKeyCheck
 import app.smspend.data.OtherSmsExporter
 import app.smspend.data.RecurringMerchantEntity
@@ -14,7 +15,7 @@ import app.smspend.data.SmSpendDatabase
 import app.smspend.data.SpendRepository
 import app.smspend.data.TransactionEntity
 import app.smspend.data.UserPreferences
-import app.smspend.data.WeeklySpendTrend
+import app.smspend.data.MonthlySpendTrend
 import app.smspend.domain.RecurringDetector
 import app.smspend.domain.SpendCategory
 import app.smspend.util.DateRanges
@@ -76,6 +77,7 @@ data class HomeUiState(
     val showMyBanks: Boolean = false,
     val detectedBankIds: Set<String> = emptySet(),
     val selectedBankIds: Set<String> = emptySet(),
+    val periodNotices: List<String> = emptyList(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -136,6 +138,37 @@ class HomeViewModel(
         }
     }
 
+    private val noticesByPageFlow = combine(warmCenterIndex, customMonth, segment) { center, custom, seg ->
+        Triple(center, custom, seg)
+    }.flatMapLatest { (center, custom, seg) ->
+        when (seg) {
+            HomeSegment.TODAY -> {
+                val (start, end) = DateRanges.todayWindow()
+                repo.observeRangeNotices(start, end).map { mapOf(-1 to it) }
+            }
+            HomeSegment.THIS_WEEK -> {
+                val week = DateRanges.weekWindow(0)
+                repo.observeRangeNotices(week.startMs, week.endExclusiveMs).map { mapOf(-1 to it) }
+            }
+            HomeSegment.MONTHS -> {
+                val indices = buildSet {
+                    add(center)
+                    if (center > HOME_PICKER_PAGE) add(center - 1)
+                    if (center < pageCount - 1) add(center + 1)
+                    add(thisMonthPage)
+                    if (thisMonthPage > HOME_PICKER_PAGE + 1) add(thisMonthPage - 1)
+                }.toList()
+                val flows = indices.map { index ->
+                    val range = monthForPage(index, custom) ?: return@map flowOf(index to emptyList<String>())
+                    repo.observeRangeNotices(range.startMs, range.endExclusiveMs)
+                        .map { notices -> index to notices }
+                }
+                if (flows.isEmpty()) flowOf(emptyMap())
+                else combine(flows) { pairs -> pairs.toMap() }
+            }
+        }
+    }
+
     private val iconNamesFlow = repo.observeCategoryIconNames()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
@@ -153,7 +186,8 @@ class HomeViewModel(
             Triple(custom, seg, Triple(dups, banks, detected))
         },
         selectedBankIds,
-    ) { triple, extras, selectedBanks ->
+        noticesByPageFlow,
+    ) { triple, extras, selectedBanks, noticesByPage ->
         val (index, byPage, rest) = triple
         val (scan, msg, sync) = rest
         val (custom, seg, bankRest) = extras
@@ -190,6 +224,10 @@ class HomeViewModel(
         val priorSpend = priorCats.filter { SpendCategory.countsAsSpend(it.bucket.key) }.sumOf { it.totalPaise }
         val priorMonth = priorIndex?.let { monthForPage(it, custom) }
         val mom = if (priorIndex != null) RecurringDetector.weekOverWeekPct(spend, priorSpend) else null
+        val notices = when (seg) {
+            HomeSegment.TODAY, HomeSegment.THIS_WEEK -> noticesByPage[-1].orEmpty()
+            HomeSegment.MONTHS -> noticesByPage[index].orEmpty()
+        }
         HomeUiState(
             segment = seg,
             months = months,
@@ -214,6 +252,7 @@ class HomeViewModel(
             showMyBanks = showBanks,
             detectedBankIds = detected,
             selectedBankIds = selectedBanks,
+            periodNotices = notices,
         )
     }
 
@@ -327,6 +366,12 @@ class HomeViewModel(
                         "Added ${result.newTransactions} spends"
                     }
                     refreshSyncLabel()
+                    // Fire-and-forget so the spinner isn't held on Gemini latency;
+                    // rows update live via Room flows when categories land.
+                    viewModelScope.launch {
+                        runCatching { repo.runAiCategorizationPass() }
+                        runCatching { SpendWidgetUpdater.update(appContext) }
+                    }
                     runCatching { repo.processPostScanAlerts(appContext) }
                     runCatching { repo.refreshRecurringMerchants() }
                     runCatching { SpendWidgetUpdater.update(appContext) }
@@ -387,18 +432,42 @@ class HomeViewModel(
         duplicateReview.value = null
     }
 
-    fun removeReviewedDuplicates() {
-        viewModelScope.launch {
-            val pairs = duplicateReview.value?.pairs.orEmpty()
-            if (pairs.isEmpty()) {
-                duplicateReview.value = null
-                return@launch
+    fun keepDuplicatePair(pairId: String) {
+        val current = duplicateReview.value ?: return
+        val pair = current.pairs.firstOrNull { it.pairId == pairId }
+        val remaining = current.pairs.filterNot { it.pairId == pairId }
+        duplicateReview.value = if (remaining.isEmpty()) null else DuplicateReviewState(remaining)
+        if (pair != null) {
+            viewModelScope.launch {
+                repo.rememberNotDuplicatePair(pair.earlierId, pair.laterId)
             }
-            scanning.value = true
-            val removed = repo.removeDuplicateLaters(pairs.map { it.laterId })
-            duplicateReview.value = null
-            message.value = "Removed $removed duplicates"
+        }
+    }
+
+    /** Mute the later copy of a pair: keep it visible, exclude it from totals. */
+    fun muteDuplicatePair(pairId: String) {
+        val current = duplicateReview.value ?: return
+        val pair = current.pairs.firstOrNull { it.pairId == pairId } ?: return
+        val remaining = current.pairs.filterNot { it.pairId == pairId }
+        duplicateReview.value = if (remaining.isEmpty()) null else DuplicateReviewState(remaining)
+        viewModelScope.launch {
+            repo.markAsDuplicate(pair.laterId, pair.earlierId)
+            message.value = "Muted duplicate — excluded from totals"
             runCatching { SpendWidgetUpdater.update(appContext) }
+        }
+    }
+
+    fun removeDuplicatePair(laterId: Long) {
+        viewModelScope.launch {
+            val current = duplicateReview.value ?: return@launch
+            scanning.value = true
+            val removed = repo.removeDuplicateLaters(listOf(laterId))
+            val remaining = current.pairs.filterNot { it.laterId == laterId }
+            duplicateReview.value = if (remaining.isEmpty()) null else DuplicateReviewState(remaining)
+            if (removed > 0) {
+                message.value = "Removed $removed duplicate"
+                runCatching { SpendWidgetUpdater.update(appContext) }
+            }
             scanning.value = false
         }
     }
@@ -415,11 +484,7 @@ class HomeViewModel(
             prefs.setMyBanksConfigured(true)
             showMyBanks.value = false
             message.value = "Banks saved"
-            runCatching {
-                repo.applyCreditPairSelfTransfers(
-                    DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1),
-                )
-            }
+            runCatching { repo.onMyBanksSaved() }
         }
     }
 
@@ -496,6 +561,14 @@ class CategoryViewModel(
         repo.observeCategoryNotes(categoryKey, monthStartMs)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val nettedTotal: StateFlow<Long> =
+        repo.observeCategoryNettedTotal(categoryKey, monthStartMs, monthEndMs)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
+
+    val nettingNotice: StateFlow<String?> =
+        repo.observeCategoryNettingNotice(categoryKey, monthStartMs, monthEndMs)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     init {
         viewModelScope.launch {
             runCatching { repo.ensureCustomCategoryIcon(categoryKey) }
@@ -531,8 +604,14 @@ class CategoryViewModel(
 class TrendsViewModel(
     private val repo: SpendRepository,
 ) : ViewModel() {
-    private val _weekly = MutableStateFlow<WeeklySpendTrend?>(null)
-    val weekly: StateFlow<WeeklySpendTrend?> = _weekly
+    private val _monthly = MutableStateFlow<MonthlySpendTrend?>(null)
+    val monthly: StateFlow<MonthlySpendTrend?> = _monthly
+
+    private val _insight = MutableStateFlow<String?>(null)
+    val insight: StateFlow<String?> = _insight
+
+    private val _insightLoading = MutableStateFlow(false)
+    val insightLoading: StateFlow<Boolean> = _insightLoading
 
     private val iconNamesFlow = repo.observeCategoryIconNames()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
@@ -541,10 +620,24 @@ class TrendsViewModel(
 
     init {
         viewModelScope.launch {
-            val snap = runCatching { repo.weeklySpendTrend() }.getOrNull()
-            _weekly.value = snap
+            val snap = runCatching { repo.monthlySpendTrend() }.getOrNull()
+            _monthly.value = snap
             val keys = snap?.ranks?.map { it.bucket.key }.orEmpty()
             runCatching { repo.ensureIconsForCategories(keys) }
+        }
+    }
+
+    fun explainTrends() {
+        viewModelScope.launch {
+            _insightLoading.value = true
+            _insight.value = null
+            runCatching {
+                val hints = repo.buildTrendsInsightHints()
+                repo.explainTrendsInsight(hints)
+            }
+                .onSuccess { _insight.value = it }
+                .onFailure { _insight.value = it.message ?: "Could not explain trends" }
+            _insightLoading.value = false
         }
     }
 
@@ -569,6 +662,7 @@ data class SettingsUiState(
     val showMyBanks: Boolean = false,
     val editingBankIds: Set<String> = emptySet(),
     val detectedBankIds: Set<String> = emptySet(),
+    val logSizeLabel: String = "0 B",
 )
 
 class SettingsViewModel(
@@ -583,6 +677,7 @@ class SettingsViewModel(
     private val showMyBanks = MutableStateFlow(false)
     private val editingBankIds = MutableStateFlow<Set<String>>(emptySet())
     private val detectedBankIds = MutableStateFlow<Set<String>>(emptySet())
+    private val logSizeLabel = MutableStateFlow(DiagLog.approxSizeLabel())
 
     val uiState: StateFlow<SettingsUiState> = combine(
         combine(
@@ -620,12 +715,14 @@ class SettingsViewModel(
             showMyBanks,
             editingBankIds,
             detectedBankIds,
-        ) { bankIds, show, editing, detected ->
+            logSizeLabel,
+        ) { bankIds, show, editing, detected, logSize ->
             SettingsUiState(
                 myBankIds = bankIds,
                 showMyBanks = show,
                 editingBankIds = editing,
                 detectedBankIds = detected,
+                logSizeLabel = logSize,
             )
         },
     ) { base, extras, banks ->
@@ -639,12 +736,14 @@ class SettingsViewModel(
             showMyBanks = banks.showMyBanks,
             editingBankIds = banks.editingBankIds,
             detectedBankIds = banks.detectedBankIds,
+            logSizeLabel = banks.logSizeLabel,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
     init {
         viewModelScope.launch {
             syncLabel.value = DateRanges.formatSyncTime(repo.lastSyncAt())
+            refreshLogSize()
         }
     }
 
@@ -663,6 +762,11 @@ class SettingsViewModel(
                 is GeminiKeyCheck.Ok -> {
                     messageIsError.value = false
                     message.value = "Key saved · Gemini OK"
+                    // Categorize rows skipped while the app ran without a key.
+                    viewModelScope.launch {
+                        runCatching { repo.retrySkippedWithAi() }
+                        runCatching { SpendWidgetUpdater.update(appContext) }
+                    }
                 }
                 is GeminiKeyCheck.Failed -> {
                     messageIsError.value = true
@@ -744,11 +848,7 @@ class SettingsViewModel(
             showMyBanks.value = false
             messageIsError.value = false
             message.value = "Banks saved"
-            runCatching {
-                repo.applyCreditPairSelfTransfers(
-                    DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1),
-                )
-            }
+            runCatching { repo.onMyBanksSaved() }
         }
     }
 
@@ -769,6 +869,10 @@ class SettingsViewModel(
                 .onSuccess {
                     message.value = "Rescanned · ${it.newTransactions} new"
                     syncLabel.value = DateRanges.formatSyncTime(repo.lastSyncAt())
+                    viewModelScope.launch {
+                        runCatching { repo.runAiCategorizationPass() }
+                        runCatching { SpendWidgetUpdater.update(appContext) }
+                    }
                     runCatching { repo.processPostScanAlerts(appContext) }
                     runCatching { repo.refreshRecurringMerchants() }
                     runCatching { SpendWidgetUpdater.update(appContext) }
@@ -817,30 +921,27 @@ class SettingsViewModel(
         viewModelScope.launch {
             busy.value = true
             messageIsError.value = false
-            val hasKey = prefs.geminiApiKey.first().isNotBlank()
-            runCatching { repo.recategorizeOther(useGemini = hasKey) }
+            runCatching { repo.reBaselineWithAi() }
                 .onSuccess { result ->
                     when {
-                        !hasKey -> {
-                            messageIsError.value = true
-                            message.value =
-                                "No API key — applied rules to ${result.rulesUpdated} only"
+                        result.pending == 0 -> {
+                            message.value = "Nothing to recategorize"
                         }
-                        result.failed > 0 && result.geminiUpdated == 0 -> {
+                        result.applied == 0 && result.failed > 0 -> {
                             messageIsError.value = true
-                            message.value = result.firstError
+                            message.value = result.error
                                 ?: "Gemini failed — check key / update app"
                         }
                         result.failed > 0 -> {
                             messageIsError.value = true
                             message.value =
-                                "Updated ${result.rulesUpdated} by rules · ${result.geminiUpdated} by Gemini · ${result.failed} failed"
+                                "Recategorized ${result.applied} with Gemini · ${result.failed} failed (will retry)"
                         }
                         else -> {
-                            message.value =
-                                "Updated ${result.rulesUpdated} by rules · ${result.geminiUpdated} by Gemini"
+                            message.value = "Recategorized ${result.applied} with Gemini"
                         }
                     }
+                    runCatching { SpendWidgetUpdater.update(appContext) }
                 }
                 .onFailure {
                     messageIsError.value = true
@@ -912,6 +1013,56 @@ class SettingsViewModel(
         }
     }
 
+    fun exportCategorizationLog() {
+        viewModelScope.launch {
+            busy.value = true
+            messageIsError.value = false
+            runCatching { DiagLog.exportToDownloads(appContext) }
+                .onSuccess { result ->
+                    when {
+                        result.error != null -> {
+                            messageIsError.value = true
+                            message.value = result.error
+                        }
+                        result.fileName != null -> {
+                            message.value =
+                                "Saved log (${result.count} lines) → Downloads/${result.fileName}"
+                        }
+                        else -> {
+                            message.value = "Nothing to export"
+                        }
+                    }
+                }
+                .onFailure {
+                    messageIsError.value = true
+                    message.value = it.message ?: "Log export failed"
+                }
+            refreshLogSize()
+            busy.value = false
+        }
+    }
+
+    fun clearCategorizationLog() {
+        viewModelScope.launch {
+            busy.value = true
+            messageIsError.value = false
+            runCatching { DiagLog.clear() }
+                .onSuccess {
+                    message.value = "Categorization log cleared"
+                    refreshLogSize()
+                }
+                .onFailure {
+                    messageIsError.value = true
+                    message.value = it.message ?: "Could not clear log"
+                }
+            busy.value = false
+        }
+    }
+
+    private fun refreshLogSize() {
+        logSizeLabel.value = DiagLog.approxSizeLabel()
+    }
+
     class Factory(
         private val repo: SpendRepository,
         private val prefs: UserPreferences,
@@ -961,6 +1112,10 @@ class OnboardingViewModel(
                     sinceOverrideMs = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1),
                 )
             }
+            // First-run backfill: categorize the scanned history in a few batched calls
+            // while the user is still on the onboarding screen. Also revives rows
+            // SKIPPED by an earlier key-less run if the user re-onboards with a key.
+            runCatching { repo.retrySkippedWithAi() }
             onDone()
         }
     }

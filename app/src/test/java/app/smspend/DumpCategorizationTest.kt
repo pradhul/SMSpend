@@ -4,6 +4,7 @@ import app.smspend.data.CategoryRules
 import app.smspend.data.GeminiCategorizer
 import app.smspend.data.SelfTransferMatcher
 import app.smspend.data.SmsDebitParser
+import app.smspend.data.TransactionEntity
 import app.smspend.domain.SpendCategory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -162,5 +163,141 @@ class DumpCategorizationTest {
         assertEquals(SpendCategory.TRANSFERS.name, mapped["rahul"])
         assertFalse(mapped.containsKey("mystery"))
         assertEquals("Health", SpendCategory.displayLabel("custom:health"))
+    }
+
+    @Test
+    fun highConfidence_beatsMemory_atmAndRdAndNeftAndJewellery() {
+        val atmBody =
+            "Withdrawn Rs.20000 From HDFC Bank Card x1868 At +KUDLU MAIN ROAD On 2026-08-04"
+        assertTrue(
+            CategoryRules.beatsMemory(
+                SpendCategory.WITHDRAWALS,
+                "atm kudlu main road",
+                "ATM KUDLU MAIN ROAD",
+                atmBody,
+            ),
+        )
+        val rdBody = "Transfer To RD XX0715 SWATHI P V. Avl bal-INR 1,22,449.48."
+        assertTrue(
+            CategoryRules.beatsMemory(
+                SpendCategory.SAVINGS,
+                "rd xx0715 swathi p v",
+                "RD XX0715 SWATHI P V",
+                rdBody,
+            ),
+        )
+        val neftBody =
+            "Amt Deducted! Rs.20000 from your HDFC Bank A/c XX7660 for NEFT txn via HDFC Bank Online Banking"
+        assertTrue(
+            CategoryRules.beatsMemory(
+                SpendCategory.TRANSFERS,
+                "bank transfer",
+                "Bank transfer",
+                neftBody,
+            ),
+        )
+        assertTrue(
+            CategoryRules.beatsMemory(
+                SpendCategory.SHOPPING,
+                "khazana jewellery pvt ltd",
+                "Khazana Jewellery Pvt Ltd",
+                "Sent Rs.15000 To Khazana Jewellery Pvt Ltd",
+            ),
+        )
+        assertTrue(
+            CategoryRules.beatsMemory(
+                SpendCategory.SHOPPING,
+                "malabar gold pvt ltd",
+                "Malabar Gold Pvt Ltd",
+                "Sent Rs.20000 To Malabar Gold Pvt Ltd",
+            ),
+        )
+        // Ordinary UPI transfer label must not override a user retag/memory.
+        assertFalse(
+            CategoryRules.beatsMemory(
+                SpendCategory.TRANSFERS,
+                "rakshitha p m",
+                "Rakshitha P M",
+                "Sent Rs.1000 To Rakshitha P M",
+            ),
+        )
+    }
+
+    @Test
+    fun jewelleryAndMalabar_rulesToShopping() {
+        assertEquals(
+            SpendCategory.SHOPPING,
+            CategoryRules.match(
+                "khazana jewellery pvt ltd",
+                "Khazana Jewellery Pvt Ltd",
+                "Sent Rs.15000 To Khazana Jewellery Pvt Ltd",
+            ),
+        )
+        assertEquals(
+            SpendCategory.SHOPPING,
+            CategoryRules.match(
+                "malabar gold pvt ltd",
+                "Malabar Gold Pvt Ltd",
+                "Sent Rs.20000 To Malabar Gold Pvt Ltd",
+            ),
+        )
+    }
+
+    @Test
+    fun opaqueNeft_amtDeductedWithoutOnlineBankingPhrase_stillBankTransfer() {
+        val body =
+            "Amt Deducted! Rs.20000 from your HDFC Bank A/c XX7660 for NEFT txn. Not you? Call 18002586161"
+        assertEquals("Bank transfer", SmsDebitParser.opaqueBankTransferMerchant(body))
+        val parsed = SmsDebitParser.parse(body, "VM-HDFCBK-S")
+        assertNotNull(parsed)
+        assertEquals("Bank transfer", parsed!!.merchantRaw)
+        assertEquals(
+            SpendCategory.TRANSFERS,
+            CategoryRules.match(parsed.merchantKey, parsed.merchantRaw, body),
+        )
+    }
+
+    @Test
+    fun aug1SwathiUpi_isNotNeft() {
+        val body =
+            """
+            Sent Rs.20000.00
+            From HDFC Bank A/C *7660
+            To SWATHI P  V
+            On 01/08/26
+            Ref 230630774391
+            """.trimIndent()
+        assertEquals(null, SmsDebitParser.opaqueBankTransferMerchant(body))
+        val parsed = SmsDebitParser.parse(body, "JM-HDFCBK-T")
+        assertNotNull(parsed)
+        assertEquals("SWATHI P  V", parsed!!.merchantRaw)
+        assertEquals(
+            SpendCategory.SELF_TRANSFER,
+            SelfTransferMatcher.resolveWithRules(
+                parsed.merchantKey,
+                parsed.merchantRaw,
+                body,
+                "Swathi",
+            ),
+        )
+    }
+
+    @Test
+    fun duplicateAndFailedNotes_excludedFromTotals() {
+        val base = TransactionEntity(
+            id = 1,
+            smsId = 1,
+            amountPaise = 100_00,
+            merchantRaw = "X",
+            merchantKey = "x",
+            category = SpendCategory.SAVINGS.name,
+            occurredAt = 1L,
+            bodySnippet = "x",
+            sender = "AD-HDFCBK-S",
+        )
+        assertTrue(base.countsTowardTotals())
+        assertFalse(base.copy(statusTag = GeminiCategorizer.DUPLICATE_NOTE).countsTowardTotals())
+        assertFalse(base.copy(statusTag = SmsDebitParser.ATM_FAILED_NOTE).countsTowardTotals())
+        assertFalse(base.copy(statusTag = SmsDebitParser.CARD_PAYMENT_NOTE).countsTowardTotals())
     }
 }

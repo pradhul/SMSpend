@@ -7,8 +7,11 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -57,9 +60,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -77,6 +82,7 @@ import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabPosition
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -118,11 +124,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.smspend.data.CategoryNoteEntity
+import app.smspend.data.CategoryMonthRank
 import app.smspend.data.CategorySpend
-import app.smspend.data.CategoryWeekRank
+import app.smspend.data.DuplicatePairCandidate
+import app.smspend.data.MonthlySpendTrend
+import app.smspend.data.SmsDebitParser
 import app.smspend.data.SpendRepository
 import app.smspend.data.TransactionEntity
-import app.smspend.data.WeeklySpendTrend
 import app.smspend.data.WrongParseResult
 import app.smspend.domain.CategoryBucket
 import app.smspend.domain.SpendCategory
@@ -138,11 +146,14 @@ import app.smspend.ui.theme.PaperRaised
 import app.smspend.util.DateRanges
 import app.smspend.util.DueLabels
 import app.smspend.util.MonthWindow
-import app.smspend.util.WeekWindow
 import app.smspend.util.paiseToCompactRupees
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.foundation.layout.heightIn
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalSharedTransitionApi::class)
 @Composable
@@ -196,7 +207,9 @@ fun HomeScreen(
     state.duplicateReview?.let { review ->
         DuplicateReviewSheet(
             pairs = review.pairs,
-            onRemove = viewModel::removeReviewedDuplicates,
+            onKeepBoth = viewModel::keepDuplicatePair,
+            onMuteLater = viewModel::muteDuplicatePair,
+            onRemoveLater = viewModel::removeDuplicatePair,
             onDismiss = viewModel::dismissDuplicateReview,
         )
     }
@@ -274,6 +287,7 @@ fun HomeScreen(
                     upcomingExplain = if (state.segment == HomeSegment.THIS_WEEK) state.upcomingExplain else null,
                     upcomingExplainLoading = state.segment == HomeSegment.THIS_WEEK && state.upcomingExplainLoading,
                     hasApiKey = hasApiKey,
+                    notices = state.periodNotices,
                     onExplainUpcoming = viewModel::explainUpcomingSpends,
                     onSync = { viewModel.syncThisPeriod() },
                     onRefresh = { viewModel.refresh(forceFullRange = false) },
@@ -364,6 +378,7 @@ fun HomeScreen(
                                     upcomingExplain = if (isSettled) state.upcomingExplain else null,
                                     upcomingExplainLoading = isSettled && state.upcomingExplainLoading,
                                     hasApiKey = hasApiKey,
+                                    notices = if (isSettled) state.periodNotices else emptyList(),
                                     onExplainUpcoming = viewModel::explainUpcomingSpends,
                                     onSync = { viewModel.syncThisPeriod() },
                                     onRefresh = { viewModel.refresh(forceFullRange = false) },
@@ -403,6 +418,7 @@ fun HomeScreen(
                                 upcomingExplain = if (isSettled) state.upcomingExplain else null,
                                 upcomingExplainLoading = isSettled && state.upcomingExplainLoading,
                                 hasApiKey = hasApiKey,
+                                notices = if (isSettled) state.periodNotices else emptyList(),
                                 onExplainUpcoming = viewModel::explainUpcomingSpends,
                                 onSync = { viewModel.syncThisPeriod() },
                                 onRefresh = { viewModel.refresh(forceFullRange = false) },
@@ -513,6 +529,7 @@ private fun PeriodSpendPage(
     upcomingExplain: String?,
     upcomingExplainLoading: Boolean,
     hasApiKey: Boolean,
+    notices: List<String> = emptyList(),
     onExplainUpcoming: () -> Unit,
     onSync: () -> Unit,
     onRefresh: () -> Unit,
@@ -529,10 +546,14 @@ private fun PeriodSpendPage(
     val accountMoves = remember(categories) {
         categories.filter { SpendCategory.isSelfTransfer(it.bucket.key) }
     }
+    val credits = remember(categories) {
+        categories.filter { SpendCategory.isCredits(it.bucket.key) }
+    }
     val spendTotalPaise = spending.sumOf { it.totalPaise }
     val savedTotalPaise = saved.sumOf { it.totalPaise }
     val savedFullWidth = saved.size < 2
     val movesFullWidth = accountMoves.size < 2
+    val creditsFullWidth = credits.size < 2
 
     PullToRefreshBox(
         isRefreshing = scanning,
@@ -574,6 +595,22 @@ private fun PeriodSpendPage(
                     Spacer(modifier = Modifier.width(8.dp))
                 }
                 Text(if (scanning) "Syncing…" else "Sync this period")
+            }
+            if (notices.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Mint.copy(alpha = 0.22f))
+                        .border(1.dp, Line, RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    notices.forEach { line ->
+                        Text(line, style = MaterialTheme.typography.bodyMedium, color = Ink)
+                    }
+                }
             }
             if (expectedSoon.isNotEmpty()) {
                 val rows = expectedSoon.mapNotNull { item ->
@@ -653,7 +690,7 @@ private fun PeriodSpendPage(
             Spacer(modifier = Modifier.height(12.dp))
 
             when {
-                spending.isEmpty() && saved.isEmpty() && accountMoves.isEmpty() && !scanning -> {
+                spending.isEmpty() && saved.isEmpty() && accountMoves.isEmpty() && credits.isEmpty() && !scanning -> {
                     Text(
                         "No activity in this period yet…",
                         color = Mute,
@@ -769,6 +806,44 @@ private fun PeriodSpendPage(
                                         weekTotalPaise = movesTotal.coerceAtLeast(1),
                                         isSavings = true,
                                         fullWidth = movesFullWidth,
+                                        iconName = iconNames[cat.bucket.key],
+                                        enableSharedElement = enableSharedElement,
+                                        onClick = { onOpenCategory(cat.bucket) },
+                                        sharedTransitionScope = sharedTransitionScope,
+                                        animatedContentScope = animatedContentScope,
+                                    )
+                                }
+                            }
+                        }
+                        if (credits.isNotEmpty()) {
+                            val creditsTotal = credits.sumOf { it.totalPaise }
+                            item(
+                                key = "credits-header",
+                                span = { GridItemSpan(maxLineSpan) },
+                            ) {
+                                Column(modifier = Modifier.padding(top = 4.dp)) {
+                                    Text(
+                                        "Credits",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = Ok,
+                                    )
+                                    Text(
+                                        "Credits into your banks — tag to net against matching spends",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Mute,
+                                    )
+                                }
+                            }
+                            credits.forEach { cat ->
+                                item(
+                                    key = "credit-${cat.bucket.key}",
+                                    span = { GridItemSpan(if (creditsFullWidth) maxLineSpan else 1) },
+                                ) {
+                                    CategoryTile(
+                                        cat = cat,
+                                        weekTotalPaise = creditsTotal.coerceAtLeast(1),
+                                        isSavings = true,
+                                        fullWidth = creditsFullWidth,
                                         iconName = iconNames[cat.bucket.key],
                                         enableSharedElement = enableSharedElement,
                                         onClick = { onOpenCategory(cat.bucket) },
@@ -1350,18 +1425,23 @@ fun CategoryScreen(
     val iconName by viewModel.iconName.collectAsStateWithLifecycle()
     val monthTotals by viewModel.monthTotals.collectAsStateWithLifecycle()
     val notes by viewModel.notes.collectAsStateWithLifecycle()
-    val total = txns.sumOf { it.amountPaise }
+    val total by viewModel.nettedTotal.collectAsStateWithLifecycle()
+    val nettingNotice by viewModel.nettingNotice.collectAsStateWithLifecycle()
     val isSavings = !SpendCategory.countsAsSpend(bucket.key)
-    var retagTarget by remember { mutableStateOf<TransactionEntity?>(null) }
+    val isCredits = SpendCategory.isCredits(bucket.key)
+    var retagLaunch by remember { mutableStateOf<RetagLaunch?>(null) }
     var detailTarget by remember { mutableStateOf<TransactionEntity?>(null) }
+    var duplicateTarget by remember { mutableStateOf<TransactionEntity?>(null) }
     var draftNote by remember { mutableStateOf("") }
     var customCategoryKeys by remember { mutableStateOf<List<String>>(emptyList()) }
+    var recentTags by remember { mutableStateOf<List<String>>(emptyList()) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val accent = CategoryColors.forKey(bucket.key)
     val headerIcon = CategoryIcons.forKey(bucket.key, iconName)
     LaunchedEffect(Unit) {
         customCategoryKeys = runCatching { repo.listCustomCategoryKeys() }.getOrDefault(emptyList())
+        recentTags = runCatching { repo.recentTags() }.getOrDefault(emptyList())
     }
 
     Column(
@@ -1403,9 +1483,16 @@ fun CategoryScreen(
         ) {
             Column {
                 Text(weekTitle.uppercase(), style = MaterialTheme.typography.labelMedium, color = Mute)
-                if (isSavings) {
+                if (isSavings && !isCredits) {
                     Text(
                         "Set aside — not spending",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Ok,
+                    )
+                }
+                if (isCredits) {
+                    Text(
+                        "Credits into your banks — tag to offset matching spends, or leave as Credits",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Ok,
                     )
@@ -1413,9 +1500,13 @@ fun CategoryScreen(
                 Text(
                     total.paiseToCompactRupees(),
                     style = MaterialTheme.typography.headlineMedium,
-                    color = if (isSavings) Ok else Debit,
+                    color = if (isSavings || isCredits) Ok else Debit,
                 )
                 Text("${txns.size} payments", style = MaterialTheme.typography.bodyMedium, color = Mute)
+                nettingNotice?.let { notice ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(notice, style = MaterialTheme.typography.bodyMedium, color = MintDeep)
+                }
             }
         }
         if (monthTotals.size >= 2) {
@@ -1486,7 +1577,7 @@ fun CategoryScreen(
         Spacer(modifier = Modifier.height(16.dp))
         Text("Transactions", style = MaterialTheme.typography.titleMedium, color = Ink)
         Text(
-            "Tap to change category · hold to see the SMS",
+            "Tap category · tag button · hold for SMS",
             style = MaterialTheme.typography.bodyMedium,
             color = Mute,
         )
@@ -1496,54 +1587,59 @@ fun CategoryScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .combinedClickable(
-                            onClick = { retagTarget = tx },
+                            onClick = { retagLaunch = RetagLaunch(tx, initialTab = 0) },
                             onLongClick = { detailTarget = tx },
                         )
                         .padding(vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(tx.merchantRaw, fontWeight = FontWeight.SemiBold, color = Ink)
-                        Text(
-                            txnListSubtitle(tx),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Mute,
-                        )
-                    }
-                    Text(
-                        tx.amountPaise.paiseToCompactRupees(),
-                        fontWeight = FontWeight.SemiBold,
-                        color = Debit,
+                    TransactionRowContent(
+                        tx = tx,
+                        subtitle = txnListSubtitle(tx),
+                        onAddTag = { retagLaunch = RetagLaunch(tx, initialTab = 1) },
+                        onDuplicateChip = { duplicateTarget = tx },
                     )
                 }
+                HorizontalDivider(color = Line)
             }
         }
     }
 
-    retagTarget?.let { tx ->
+    retagLaunch?.let { launch ->
+        val tx = txns.firstOrNull { it.id == launch.tx.id } ?: launch.tx
         RetagSheet(
             transaction = tx,
             hasApiKey = hasApiKey,
             customCategoryKeys = customCategoryKeys,
-            onDismiss = { retagTarget = null },
+            recentTags = recentTags,
+            initialTab = launch.initialTab,
+            onDismiss = { retagLaunch = null },
             onSave = { categoryKey, applyAll ->
                 scope.launch {
                     repo.retag(tx.id, categoryKey, applyAll)
-                    retagTarget = null
+                    retagLaunch = null
                     customCategoryKeys =
                         runCatching { repo.listCustomCategoryKeys() }.getOrDefault(customCategoryKeys)
+                }
+            },
+            onSaveTag = { tag ->
+                scope.launch {
+                    repo.setTransactionNote(tx.id, tag)
+                    recentTags = runCatching { repo.recentTags() }.getOrDefault(recentTags)
+                    retagLaunch = null
                 }
             },
             onAskGemini = { applyAll ->
                 scope.launch {
                     repo.askGeminiForTransaction(tx.id, applyAll)
-                    retagTarget = null
+                    retagLaunch = null
                 }
             },
         )
     }
 
-    detailTarget?.let { tx ->
+    detailTarget?.let { snap ->
+        val tx = txns.firstOrNull { it.id == snap.id } ?: snap
         TransactionDetailSheet(
             transaction = tx,
             hasApiKey = hasApiKey,
@@ -1551,7 +1647,7 @@ fun CategoryScreen(
             onDismiss = { detailTarget = null },
             onChangeCategory = {
                 detailTarget = null
-                retagTarget = tx
+                retagLaunch = RetagLaunch(tx, initialTab = 0)
             },
             onReportWrong = {
                 scope.launch {
@@ -1562,17 +1658,161 @@ fun CategoryScreen(
             },
         )
     }
+    duplicateTarget?.let { snap ->
+        val tx = txns.firstOrNull { it.id == snap.id } ?: snap
+        DuplicateStatusSheet(
+            transaction = tx,
+            repo = repo,
+            onDismiss = { duplicateTarget = null },
+        )
+    }
 }
 
+/** Subtle marker for rows still waiting on the batched Gemini pass. */
+private fun aiPendingSuffix(tx: TransactionEntity): String =
+    if (tx.aiStatus == TransactionEntity.AI_PENDING) " · AI pending" else ""
+
+/** Status tags that render as a subcategory-style chip in the row itself. */
+private fun statusChipFor(tx: TransactionEntity): Pair<String, Color>? = when {
+    tx.isAtmFailed() -> "Failed" to Debit
+    tx.isCardBillPaymentNote() -> "Card payment" to Mute
+    tx.isPossibleDuplicateNote() -> "Duplicate" to Mute
+    tx.statusTag.startsWith("Paired ·", ignoreCase = true) -> "Self transfer" to Mute
+    tx.statusTag.equals(SmsDebitParser.SELF_RD_WENT_NOTE, ignoreCase = true) -> "Self transfer" to Mute
+    tx.statusTag.equals(SmsDebitParser.SELF_RD_FROM_NOTE, ignoreCase = true) -> "From own account" to Mute
+    tx.isCredit() -> "Credit" to Ok
+    else -> null
+}
+
+private fun cardSpendChipLabel(tx: TransactionEntity): String? = tx.cardSpendLabel()
+
+private fun hasSystemStatus(tx: TransactionEntity): Boolean =
+    tx.isAtmFailed() || tx.isCardBillPaymentNote() || tx.isPossibleDuplicateNote() ||
+        tx.statusTag.startsWith("Paired ·", ignoreCase = true) ||
+        tx.statusTag.equals(SmsDebitParser.SELF_RD_WENT_NOTE, ignoreCase = true) ||
+        tx.statusTag.equals(SmsDebitParser.SELF_RD_FROM_NOTE, ignoreCase = true)
+
+/** @deprecated Use [hasSystemStatus] — status no longer lives in note. */
+private fun hasStatusChipNote(tx: TransactionEntity): Boolean = hasSystemStatus(tx)
+
 private fun txnListSubtitle(tx: TransactionEntity): String {
+    // Tags render as chips on their own row — keep the subtitle to time only.
     val time = DateRanges.formatTxnTime(tx.occurredAt)
-    return if (tx.note.isNotBlank()) "${tx.note} · $time" else time
+    return time + aiPendingSuffix(tx)
 }
 
 private fun searchListSubtitle(tx: TransactionEntity): String {
-    val base = "${SpendCategory.displayLabel(tx.category)} · ${DateRanges.formatTxnTime(tx.occurredAt)}"
-    return if (tx.note.isNotBlank()) "${tx.note} · $base" else base
+    val catTime = "${SpendCategory.displayLabel(tx.category)} · ${DateRanges.formatTxnTime(tx.occurredAt)}"
+    return catTime + aiPendingSuffix(tx)
 }
+
+@Composable
+private fun StatusChip(
+    label: String,
+    tint: Color,
+    onClick: (() -> Unit)? = null,
+) {
+    val base = Modifier
+        .clip(RoundedCornerShape(8.dp))
+        .background(tint.copy(alpha = 0.12f))
+        .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+        .padding(horizontal = 8.dp, vertical = 2.dp)
+    Box(modifier = base) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = tint,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TransactionRowContent(
+    tx: TransactionEntity,
+    subtitle: String,
+    onAddTag: (() -> Unit)? = null,
+    onDuplicateChip: (() -> Unit)? = null,
+) {
+    val chip = statusChipFor(tx)
+    val failed = tx.isAtmFailed()
+    val mutedAmount = failed || tx.isCardBillPaymentNote() || tx.isPossibleDuplicateNote()
+    val credit = tx.isCredit()
+    val tags = tx.userTags()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                tx.merchantRaw,
+                fontWeight = FontWeight.SemiBold,
+                color = if (failed) Ink.copy(alpha = 0.45f) else Ink,
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (chip != null) {
+                    StatusChip(
+                        label = chip.first,
+                        tint = chip.second,
+                        onClick = if (tx.isPossibleDuplicateNote()) onDuplicateChip else null,
+                    )
+                }
+                cardSpendChipLabel(tx)?.let { label ->
+                    StatusChip(label = label, tint = MintDeep)
+                }
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                )
+            }
+            if (tags.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    tags.forEach { tag ->
+                        StatusChip(label = tag, tint = MintDeep)
+                    }
+                }
+            }
+        }
+        if (onAddTag != null) {
+            IconButton(
+                onClick = onAddTag,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    Icons.Default.LocalOffer,
+                    contentDescription = "Add tag",
+                    tint = if (tx.note.isNotBlank()) MintDeep else Mute,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        Text(
+            if (credit) "+${tx.amountPaise.paiseToCompactRupees()}" else tx.amountPaise.paiseToCompactRupees(),
+            fontWeight = if (mutedAmount) FontWeight.Medium else FontWeight.SemiBold,
+            color = when {
+                credit -> Ok
+                mutedAmount -> Mute
+                else -> Debit
+            },
+            textDecoration = if (failed) TextDecoration.LineThrough else TextDecoration.None,
+        )
+    }
+}
+
+private data class RetagLaunch(
+    val tx: TransactionEntity,
+    val initialTab: Int = 0,
+)
 
 private fun wrongParseMessage(result: WrongParseResult): String = when (result) {
     is WrongParseResult.Fixed -> buildString {
@@ -1600,11 +1840,17 @@ fun TransactionDetailSheet(
         mutableStateOf(transaction.note)
     }
     var recentTags by remember { mutableStateOf<List<String>>(emptyList()) }
+    var duplicatePeers by remember { mutableStateOf<List<TransactionEntity>>(emptyList()) }
+    var showMarkDuplicate by remember { mutableStateOf(false) }
+    var confirmDuplicatePeer by remember { mutableStateOf<TransactionEntity?>(null) }
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val credit = transaction.isCredit()
 
-    LaunchedEffect(transaction.id) {
+    LaunchedEffect(transaction.id, transaction.statusTag, transaction.note, transaction.category) {
         recentTags = repo.recentTags()
+        duplicatePeers = repo.findNearbyDuplicatePeers(transaction)
+        draftNote = transaction.note
     }
 
     ModalBottomSheet(
@@ -1621,21 +1867,53 @@ fun TransactionDetailSheet(
             Text(
                 transaction.merchantRaw,
                 style = MaterialTheme.typography.titleLarge,
-                color = Ink,
+                color = if (transaction.isAtmFailed()) Ink.copy(alpha = 0.45f) else Ink,
             )
             Text(
-                transaction.amountPaise.paiseToCompactRupees(),
+                if (credit) {
+                    "+${transaction.amountPaise.paiseToCompactRupees()}"
+                } else {
+                    transaction.amountPaise.paiseToCompactRupees()
+                },
                 style = MaterialTheme.typography.headlineMedium,
-                color = Debit,
+                color = when {
+                    credit -> Ok
+                    transaction.isAtmFailed() || transaction.isCardBillPaymentNote() ||
+                        transaction.isPossibleDuplicateNote() -> Mute
+                    else -> Debit
+                },
+                textDecoration = if (transaction.isAtmFailed()) TextDecoration.LineThrough else TextDecoration.None,
             )
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "${SpendCategory.displayLabel(transaction.category)} · ${DateRanges.formatTxnTime(transaction.occurredAt)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Mute,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                statusChipFor(transaction)?.let { chip ->
+                    StatusChip(label = chip.first, tint = chip.second)
+                }
+                Text(
+                    "${SpendCategory.displayLabel(transaction.category)} · " +
+                        DateRanges.formatTxnTime(transaction.occurredAt) +
+                        aiPendingSuffix(transaction),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                )
+            }
             Spacer(modifier = Modifier.height(16.dp))
-            Text("NOTE / TAG", style = MaterialTheme.typography.labelMedium, color = Mute)
+            Text("TAG", style = MaterialTheme.typography.labelMedium, color = Mute)
+            if (transaction.statusTag.isNotBlank()) {
+                Text(
+                    "Status: ${transaction.statusTag}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            cardSpendChipLabel(transaction)?.let { label ->
+                StatusChip(label = label, tint = MintDeep)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
             OutlinedTextField(
                 value = draftNote,
                 onValueChange = { draftNote = it },
@@ -1657,7 +1935,7 @@ fun TransactionDetailSheet(
                 },
                 enabled = draftNote.trim() != transaction.note.trim(),
             ) {
-                Text("Save note", color = MintDeep)
+                Text("Save tags", color = MintDeep)
             }
             if (recentTags.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -1665,16 +1943,27 @@ fun TransactionDetailSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    val draftTagList = draftNote.split(',').map { it.trim() }.filter { it.isNotEmpty() }
                     recentTags.forEach { tag ->
+                        val norm = TransactionEntity.normalizeUserTag(tag)
+                        val selectedTag =
+                            draftTagList.any { TransactionEntity.normalizeUserTag(it) == norm }
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
-                                .border(1.dp, Line, RoundedCornerShape(10.dp))
-                                .background(Paper)
+                                .border(1.dp, if (selectedTag) Ink else Line, RoundedCornerShape(10.dp))
+                                .background(if (selectedTag) Mint.copy(alpha = 0.35f) else Paper)
                                 .clickable {
-                                    draftNote = tag
+                                    val next = if (selectedTag) {
+                                        draftTagList.filterNot {
+                                            TransactionEntity.normalizeUserTag(it) == norm
+                                        }
+                                    } else {
+                                        draftTagList + tag
+                                    }
+                                    draftNote = next.joinToString(", ")
                                     scope.launch {
-                                        repo.setTransactionNote(transaction.id, tag)
+                                        repo.setTransactionNote(transaction.id, draftNote)
                                         recentTags = repo.recentTags()
                                     }
                                 }
@@ -1686,6 +1975,101 @@ fun TransactionDetailSheet(
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
+            Text("STATUS", style = MaterialTheme.typography.labelMedium, color = Mute)
+            if (transaction.isPossibleDuplicateNote()) {
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            repo.markNotDuplicate(transaction.id)
+                            onDismiss()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("Not a duplicate", color = Ok)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            if (!transaction.isCredit()) {
+                if (showMarkDuplicate) {
+                    Text(
+                        "Pick the matching transaction",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Mute,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    if (duplicatePeers.isEmpty()) {
+                        Text(
+                            "No same-amount peers within 24h",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Mute,
+                        )
+                    } else {
+                        duplicatePeers.take(6).forEach { peer ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .border(1.dp, Line, RoundedCornerShape(10.dp))
+                                    .clickable { confirmDuplicatePeer = peer }
+                                    .padding(12.dp),
+                            ) {
+                                Column {
+                                    Text(peer.merchantRaw, fontWeight = FontWeight.SemiBold, color = Ink)
+                                    Text(
+                                        "${peer.amountPaise.paiseToCompactRupees()} · ${DateRanges.formatTxnTime(peer.occurredAt)}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Mute,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    TextButton(onClick = { showMarkDuplicate = false }) {
+                        Text("Cancel", color = Mute)
+                    }
+                } else if (!transaction.isPossibleDuplicateNote()) {
+                    OutlinedButton(
+                        onClick = { showMarkDuplicate = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text("Mark as duplicate", color = Ink)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                if (transaction.isCardBillPaymentNote()) {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                repo.clearCardBillPayment(transaction.id)
+                                onDismiss()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text("Not a card bill payment", color = Debit)
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                repo.markAsCardBillPayment(transaction.id)
+                                onDismiss()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text("Mark as card bill payment", color = Ink)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            Spacer(modifier = Modifier.height(8.dp))
             Text("SOURCE SMS", style = MaterialTheme.typography.labelMedium, color = Mute)
             Text(
                 "From ${transaction.sender}",
@@ -1750,18 +2134,327 @@ fun TransactionDetailSheet(
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
+    confirmDuplicatePeer?.let { peer ->
+        val laterId = if (transaction.occurredAt <= peer.occurredAt) peer.id else transaction.id
+        val earlierId = if (laterId == peer.id) transaction.id else peer.id
+        DuplicateCompareSheet(
+            pair = pairCandidateFor(transaction, peer),
+            onKeepBoth = {
+                scope.launch {
+                    repo.rememberNotDuplicatePair(earlierId, laterId)
+                    confirmDuplicatePeer = null
+                    showMarkDuplicate = false
+                }
+            },
+            onMute = {
+                scope.launch {
+                    repo.markAsDuplicate(transaction.id, peer.id)
+                    confirmDuplicatePeer = null
+                    onDismiss()
+                }
+            },
+            onDelete = {
+                scope.launch {
+                    repo.removeDuplicateLaters(listOf(laterId))
+                    confirmDuplicatePeer = null
+                    onDismiss()
+                }
+            },
+            deleteLabel = "Delete the later copy",
+            dismissLabel = "Cancel",
+            onDismiss = { confirmDuplicatePeer = null },
+        )
+    }
 }
 
+/**
+ * Chip-tap entry point: loads the matched twin and shows the shared compare sheet.
+ * The tapped transaction is already muted, so the actions are Keep both / Delete / Keep muted.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DuplicateStatusSheet(
+    transaction: TransactionEntity,
+    repo: SpendRepository,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var peer by remember(transaction.id) { mutableStateOf<TransactionEntity?>(null) }
+    var loaded by remember(transaction.id) { mutableStateOf(false) }
+    LaunchedEffect(transaction.id) {
+        peer = repo.findDuplicatePeer(transaction.id)
+        loaded = true
+    }
+    if (!loaded) return
+    val matched = peer
+    if (matched == null) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = PaperRaised,
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+                    .fillMaxWidth(),
+            ) {
+                Text("Possible duplicate", style = MaterialTheme.typography.titleLarge, color = Ink)
+                Text(
+                    "${transaction.merchantRaw} · ${transaction.amountPaise.paiseToCompactRupees()}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                )
+                Text(
+                    "No matching transaction found nearby. It's muted — excluded from totals.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = {
+                        scope.launch {
+                            repo.markNotDuplicate(transaction.id)
+                            onDismiss()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("Not a duplicate — count it")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("Keep muted", color = Mute)
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    } else {
+        val flaggedIsEarlier = transaction.occurredAt <= matched.occurredAt
+        DuplicateCompareSheet(
+            pair = pairCandidateFor(transaction, matched),
+            earlierTitle = if (flaggedIsEarlier) "This one · muted" else "Counted in totals",
+            laterTitle = if (flaggedIsEarlier) "Counted in totals" else "This one · muted",
+            onKeepBoth = {
+                scope.launch {
+                    repo.markNotDuplicate(transaction.id)
+                    onDismiss()
+                }
+            },
+            onMute = null,
+            onDelete = {
+                scope.launch {
+                    repo.removeDuplicateLaters(listOf(transaction.id))
+                    onDismiss()
+                }
+            },
+            deleteLabel = "Delete the muted copy",
+            dismissLabel = "Keep muted",
+            onDismiss = onDismiss,
+        )
+    }
+}
+
+/** Builds a compare-sheet pair from two loaded transactions, ordered by time. */
+private fun pairCandidateFor(a: TransactionEntity, b: TransactionEntity): DuplicatePairCandidate {
+    val earlier = if (a.occurredAt <= b.occurredAt) a else b
+    val later = if (a.occurredAt <= b.occurredAt) b else a
+    return DuplicatePairCandidate(
+        pairId = "${earlier.id}|${later.id}",
+        earlierId = earlier.id,
+        laterId = later.id,
+        amountPaise = later.amountPaise,
+        earlierSender = earlier.sender,
+        laterSender = later.sender,
+        earlierSnippet = earlier.bodySnippet,
+        laterSnippet = later.bodySnippet,
+        earlierMerchant = earlier.merchantRaw,
+        laterMerchant = later.merchantRaw,
+        earlierAt = earlier.occurredAt,
+        laterAt = later.occurredAt,
+        earlierNote = earlier.note,
+        laterNote = later.note,
+    )
+}
+
+private fun duplicateGapLabel(earlierAt: Long, laterAt: Long): String {
+    val gapMs = abs(laterAt - earlierAt)
+    return when {
+        gapMs < TimeUnit.MINUTES.toMillis(1) -> "same minute"
+        gapMs < TimeUnit.HOURS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toMinutes(gapMs)} min apart"
+        else -> "${TimeUnit.MILLISECONDS.toHours(gapMs)} h apart"
+    }
+}
+
+/**
+ * The single duplicate-resolution surface used by every flow: post-sync review,
+ * chip tap, and the detail-sheet "Mark as duplicate" confirmation.
+ * Shows both transactions with three actions — Keep both, Mute (optional), Delete (confirmed).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DuplicateCompareSheet(
+    pair: DuplicatePairCandidate,
+    positionLabel: String? = null,
+    earlierTitle: String = "Earlier · counted",
+    laterTitle: String = "Later copy",
+    onKeepBoth: () -> Unit,
+    onMute: (() -> Unit)? = null,
+    onDelete: () -> Unit,
+    deleteLabel: String = "Delete this copy",
+    onSkip: (() -> Unit)? = null,
+    dismissLabel: String = "Done",
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var confirmDelete by remember(pair.pairId) { mutableStateOf(false) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = PaperRaised,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Possible duplicate", style = MaterialTheme.typography.titleLarge, color = Ink)
+                positionLabel?.let {
+                    Text(it, style = MaterialTheme.typography.labelMedium, color = Mute)
+                }
+            }
+            Text(
+                "${pair.amountPaise.paiseToCompactRupees()} · " +
+                    "${duplicateGapLabel(pair.earlierAt, pair.laterAt)} — same payment reported twice?",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Mute,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            DuplicateSideBlock(
+                title = earlierTitle,
+                titleColor = Ok,
+                merchant = pair.earlierMerchant,
+                timeLabel = DateRanges.formatTxnTime(pair.earlierAt),
+                sender = pair.earlierSender,
+                note = pair.earlierNote,
+                snippet = pair.earlierSnippet,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            DuplicateSideBlock(
+                title = laterTitle,
+                titleColor = Mute,
+                merchant = pair.laterMerchant,
+                timeLabel = DateRanges.formatTxnTime(pair.laterAt),
+                sender = pair.laterSender,
+                note = pair.laterNote,
+                snippet = pair.laterSnippet,
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            if (onMute != null) {
+                Button(
+                    onClick = onMute,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("Mute this copy")
+                }
+                Text(
+                    "Keeps it visible but excludes it from totals. Reversible anytime.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Mute,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            OutlinedButton(
+                onClick = onKeepBoth,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("Keep both — separate payments", color = Ok)
+            }
+            TextButton(
+                onClick = { confirmDelete = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(deleteLabel, color = Debit)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                if (onSkip != null) {
+                    TextButton(onClick = onSkip) {
+                        Text("Skip", color = Mute)
+                    }
+                } else {
+                    Spacer(modifier = Modifier.width(1.dp))
+                }
+                TextButton(onClick = onDismiss) {
+                    Text(dismissLabel, color = Mute)
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            containerColor = PaperRaised,
+            title = { Text("Delete this copy?", color = Ink) },
+            text = {
+                Text(
+                    "Removes it from SMSpend and skips it on future scans. " +
+                        "Your SMS inbox is not affected.",
+                    color = Mute,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                        onDelete()
+                    },
+                ) {
+                    Text("Delete", color = Debit)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text("Cancel", color = Mute)
+                }
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun RetagSheet(
     transaction: TransactionEntity,
     hasApiKey: Boolean,
     customCategoryKeys: List<String> = emptyList(),
+    recentTags: List<String> = emptyList(),
+    initialTab: Int = 0,
     onDismiss: () -> Unit,
     onSave: (categoryKey: String, applyAll: Boolean) -> Unit,
+    onSaveTag: (tag: String) -> Unit = {},
     onAskGemini: (applyAll: Boolean) -> Unit,
 ) {
+    var selectedTab by remember { mutableStateOf(initialTab.coerceIn(0, 1)) }
     var selected by remember {
         mutableStateOf(
             if (SpendCategory.isCustomKey(transaction.category)) {
@@ -1785,9 +2478,20 @@ fun RetagSheet(
             },
         )
     }
-    var applyAll by remember { mutableStateOf(true) }
+    // Credits never apply-to-similar: they often share a bank-label merchant, so
+    // bulk retag would hit every credit into that bank (repository guards this too).
+    var applyAll by remember(transaction.id) { mutableStateOf(!transaction.isCredit()) }
     var busy by remember { mutableStateOf(false) }
     var savePressed by remember { mutableStateOf(false) }
+    val systemNote = hasSystemStatus(transaction)
+    var draftTags by remember(transaction.id, transaction.note) {
+        mutableStateOf(transaction.userTags())
+    }
+    var newTagText by remember(transaction.id) { mutableStateOf("") }
+    LaunchedEffect(transaction.id, transaction.note, transaction.statusTag) {
+        draftTags = transaction.userTags()
+        newTagText = ""
+    }
     val saveScale by animateFloatAsState(
         targetValue = if (savePressed) 0.96f else 1f,
         animationSpec = tween(120),
@@ -1805,144 +2509,307 @@ fun RetagSheet(
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            Text("CHANGE CATEGORY", style = MaterialTheme.typography.labelMedium, color = Mute)
+            Text(
+                if (selectedTab == 0) "CHANGE CATEGORY" else "TAGS",
+                style = MaterialTheme.typography.labelMedium,
+                color = Mute,
+            )
             Text(
                 "${transaction.merchantRaw} · ${transaction.amountPaise.paiseToCompactRupees()}",
                 style = MaterialTheme.typography.titleMedium,
                 color = Ink,
             )
             Spacer(modifier = Modifier.height(12.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SpendCategory.entries.chunked(2).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { cat ->
-                            val selectedChip = selected == cat && customText.isBlank() && selectedCustomKey == null
-                            val chipScale by animateFloatAsState(
-                                targetValue = if (selectedChip) 1.02f else 1f,
-                                animationSpec = spring(
-                                    dampingRatio = Spring.DampingRatioNoBouncy,
-                                    stiffness = Spring.StiffnessHigh,
-                                ),
-                                label = "chipScale",
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .scale(chipScale)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .border(1.dp, if (selectedChip) Ink else Line, RoundedCornerShape(12.dp))
-                                    .background(if (selectedChip) Mint.copy(alpha = 0.35f) else PaperRaised)
-                                    .clickable {
-                                        selected = cat
-                                        selectedCustomKey = null
-                                        customText = ""
-                                    }
-                                    .padding(12.dp),
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        CategoryIcons.forPreset(cat),
-                                        contentDescription = null,
-                                        tint = CategoryColors.forKey(cat.name),
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(cat.label, fontWeight = FontWeight.SemiBold, color = Ink)
-                                }
-                            }
-                        }
-                        if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
-                    }
-                }
-                if (customCategoryKeys.isNotEmpty()) {
-                    Text("Your categories", style = MaterialTheme.typography.labelMedium, color = Mute)
-                    customCategoryKeys.chunked(2).forEach { row ->
+            TabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = PaperRaised,
+                contentColor = Ink,
+            ) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("Category") },
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("Tags") },
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+
+            AnimatedContent(
+                targetState = selectedTab,
+                transitionSpec = {
+                    (fadeIn(tween(220, delayMillis = 60)) togetherWith fadeOut(tween(90)))
+                        .using(
+                            SizeTransform(clip = false) { _, _ ->
+                                tween(280, easing = FastOutSlowInEasing)
+                            },
+                        )
+                },
+                label = "retagTabContent",
+            ) { tab ->
+                Column {
+                    if (tab == 0) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SpendCategory.entries.chunked(2).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            row.forEach { key ->
-                                val selectedChip = selectedCustomKey == key && customText.isBlank()
+                            row.forEach { cat ->
+                                val selectedChip = selected == cat && customText.isBlank() && selectedCustomKey == null
+                                val chipScale by animateFloatAsState(
+                                    targetValue = if (selectedChip) 1.02f else 1f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessHigh,
+                                    ),
+                                    label = "chipScale",
+                                )
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
+                                        .scale(chipScale)
                                         .clip(RoundedCornerShape(12.dp))
                                         .border(1.dp, if (selectedChip) Ink else Line, RoundedCornerShape(12.dp))
                                         .background(if (selectedChip) Mint.copy(alpha = 0.35f) else PaperRaised)
                                         .clickable {
-                                            selected = null
-                                            selectedCustomKey = key
+                                            selected = cat
+                                            selectedCustomKey = null
                                             customText = ""
                                         }
                                         .padding(12.dp),
                                 ) {
-                                    Text(
-                                        SpendCategory.displayLabel(key),
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Ink,
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            CategoryIcons.forPreset(cat),
+                                            contentDescription = null,
+                                            tint = CategoryColors.forKey(cat.name),
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(cat.label, fontWeight = FontWeight.SemiBold, color = Ink)
+                                    }
                                 }
                             }
                             if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
                         }
                     }
+                    if (customCategoryKeys.isNotEmpty()) {
+                        Text("Your categories", style = MaterialTheme.typography.labelMedium, color = Mute)
+                        customCategoryKeys.chunked(2).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                row.forEach { key ->
+                                    val selectedChip = selectedCustomKey == key && customText.isBlank()
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .border(1.dp, if (selectedChip) Ink else Line, RoundedCornerShape(12.dp))
+                                            .background(if (selectedChip) Mint.copy(alpha = 0.35f) else PaperRaised)
+                                            .clickable {
+                                                selected = null
+                                                selectedCustomKey = key
+                                                customText = ""
+                                            }
+                                            .padding(12.dp),
+                                    ) {
+                                        Text(
+                                            SpendCategory.displayLabel(key),
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Ink,
+                                        )
+                                    }
+                                }
+                                if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
                 }
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            OutlinedTextField(
-                value = customText,
-                onValueChange = {
-                    customText = it
-                    if (it.isNotBlank()) {
-                        selected = null
-                        selectedCustomKey = null
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Or type a new category") },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Ink,
-                    unfocusedBorderColor = Line,
-                    focusedLabelColor = Mute,
-                ),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
-                Checkbox(checked = applyAll, onCheckedChange = { applyAll = it })
-                Text(
-                    "Apply to all similar (${transaction.merchantRaw})",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Ink,
-                )
-            }
-            Button(
-                onClick = {
-                    savePressed = true
-                    val key = when {
-                        customText.isNotBlank() -> SpendCategory.resolveStorageKey(customText, selected)
-                        selectedCustomKey != null -> selectedCustomKey!!
-                        else -> SpendCategory.resolveStorageKey("", selected)
-                    }
-                    onSave(key, applyAll)
-                },
-                enabled = !busy && (selected != null || selectedCustomKey != null || customText.isNotBlank()),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .scale(saveScale),
-                colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
-                shape = RoundedCornerShape(14.dp),
-            ) {
-                Text("Save")
-            }
-            if (hasApiKey) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = {
-                        busy = true
-                        onAskGemini(applyAll)
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = customText,
+                    onValueChange = {
+                        customText = it
+                        if (it.isNotBlank()) {
+                            selected = null
+                            selectedCustomKey = null
+                        }
                     },
-                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Or type a new category") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Ink,
+                        unfocusedBorderColor = Line,
+                        focusedLabelColor = Mute,
+                    ),
+                )
+                if (!transaction.isCredit()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
+                        Checkbox(checked = applyAll, onCheckedChange = { applyAll = it })
+                        Text(
+                            "Apply to all similar (${transaction.merchantRaw})",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Ink,
+                        )
+                    }
+                }
+                Button(
+                    onClick = {
+                        savePressed = true
+                        val key = when {
+                            customText.isNotBlank() -> SpendCategory.resolveStorageKey(customText, selected)
+                            selectedCustomKey != null -> selectedCustomKey!!
+                            else -> SpendCategory.resolveStorageKey("", selected)
+                        }
+                        onSave(key, applyAll)
+                    },
+                    enabled = !busy && (selected != null || selectedCustomKey != null || customText.isNotBlank()),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .scale(saveScale),
+                    colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("Ask Gemini", color = Ink)
+                    Text("Save")
+                }
+                if (hasApiKey) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            busy = true
+                            onAskGemini(applyAll)
+                        },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text("Ask Gemini", color = Ink)
+                    }
+                }
+            } else {
+                if (systemNote) {
+                    statusChipFor(transaction)?.let { chip ->
+                        StatusChip(label = chip.first, tint = chip.second)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    Text(
+                        "System status (${transaction.statusTag}) is separate from your tag. Clear status only if you want this row to count as normal spend.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Mute,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = { onSaveTag("") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text("Clear status tag", color = Debit)
+                    }
+                }
+                fun mergedTags(): List<String> {
+                    val extra = newTagText.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                    val out = mutableListOf<String>()
+                    val seen = mutableSetOf<String>()
+                    for (tag in draftTags + extra) {
+                        if (seen.add(TransactionEntity.normalizeUserTag(tag))) out.add(tag)
+                    }
+                    return out
+                }
+
+                val storedNorm = transaction.userTags().map { TransactionEntity.normalizeUserTag(it) }
+                val draftDirty =
+                    mergedTags().map { TransactionEntity.normalizeUserTag(it) } != storedNorm
+
+                if (draftTags.isNotEmpty()) {
+                    Text("Tags on this transaction", style = MaterialTheme.typography.labelMedium, color = Mute)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        draftTags.forEach { tag ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .border(1.dp, Ink, RoundedCornerShape(10.dp))
+                                    .background(Mint.copy(alpha = 0.35f))
+                                    .clickable { draftTags = draftTags - tag }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            ) {
+                                Text(
+                                    "$tag  ✕",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Ink,
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+                OutlinedTextField(
+                    value = newTagText,
+                    onValueChange = { newTagText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Add tag") },
+                    placeholder = { Text("Bike taxi, Grocery, Rahul…") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Ink,
+                        unfocusedBorderColor = Line,
+                        focusedLabelColor = Mute,
+                    ),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { onSaveTag(mergedTags().joinToString(", ")) },
+                    enabled = draftDirty,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("Save tags")
+                }
+                if (!systemNote && transaction.userTags().isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = { onSaveTag("") }) {
+                        Text("Remove all tags", color = Debit)
+                    }
+                }
+                if (recentTags.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Recent tags", style = MaterialTheme.typography.labelMedium, color = Mute)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        recentTags.forEach { tag ->
+                            val norm = TransactionEntity.normalizeUserTag(tag)
+                            val selectedTag =
+                                draftTags.any { TransactionEntity.normalizeUserTag(it) == norm }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .border(1.dp, if (selectedTag) Ink else Line, RoundedCornerShape(10.dp))
+                                    .background(if (selectedTag) Mint.copy(alpha = 0.35f) else Paper)
+                                    .clickable {
+                                        draftTags = if (selectedTag) {
+                                            draftTags.filterNot {
+                                                TransactionEntity.normalizeUserTag(it) == norm
+                                            }
+                                        } else {
+                                            draftTags + tag
+                                        }
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            ) {
+                                Text(tag, style = MaterialTheme.typography.bodyMedium, color = Ink)
+                            }
+                        }
+                    }
+                }
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))
@@ -1976,12 +2843,16 @@ fun SettingsScreen(
     }
     LaunchedEffect(state.selfNameAliases) { draftSelfNames = state.selfNameAliases }
     val needsStoragePermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
-    var pendingExportAll by remember { mutableStateOf(false) }
+    var pendingExport by remember { mutableStateOf<String?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted || !needsStoragePermission) {
-            viewModel.exportOtherSms(all = pendingExportAll)
+            when (pendingExport) {
+                "all" -> viewModel.exportOtherSms(all = true)
+                "other" -> viewModel.exportOtherSms(all = false)
+                "log" -> viewModel.exportCategorizationLog()
+            }
         } else {
             Toast.makeText(
                 context,
@@ -1989,6 +2860,7 @@ fun SettingsScreen(
                 Toast.LENGTH_SHORT,
             ).show()
         }
+        pendingExport = null
     }
 
     Column(
@@ -2218,7 +3090,7 @@ fun SettingsScreen(
         ) {
             OutlinedButton(
                 onClick = {
-                    pendingExportAll = false
+                    pendingExport = "other"
                     if (needsStoragePermission) {
                         exportLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     } else {
@@ -2234,7 +3106,7 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedButton(
                 onClick = {
-                    pendingExportAll = true
+                    pendingExport = "all"
                     if (needsStoragePermission) {
                         exportLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     } else {
@@ -2246,6 +3118,36 @@ fun SettingsScreen(
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Text("Export ALL inbox SMS", color = Ink)
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        SettingsCard(
+            title = "Diagnostics",
+            body = "Rolling on-device categorization log (${state.logSizeLabel}). Export to Downloads when something looks wrong, or clear to free space.",
+        ) {
+            OutlinedButton(
+                onClick = {
+                    pendingExport = "log"
+                    if (needsStoragePermission) {
+                        exportLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    } else {
+                        viewModel.exportCategorizationLog()
+                    }
+                },
+                enabled = !state.busy,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("Export categorization log", color = Ink)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { viewModel.clearCategorizationLog() },
+                enabled = !state.busy,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("Clear log", color = Ink)
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
@@ -2302,13 +3204,16 @@ fun SearchScreen(
 ) {
     val query by viewModel.queryText.collectAsStateWithLifecycle()
     val results by viewModel.results.collectAsStateWithLifecycle()
-    var retagTarget by remember { mutableStateOf<TransactionEntity?>(null) }
+    var retagLaunch by remember { mutableStateOf<RetagLaunch?>(null) }
     var detailTarget by remember { mutableStateOf<TransactionEntity?>(null) }
+    var duplicateTarget by remember { mutableStateOf<TransactionEntity?>(null) }
     var customCategoryKeys by remember { mutableStateOf<List<String>>(emptyList()) }
+    var recentTags by remember { mutableStateOf<List<String>>(emptyList()) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     LaunchedEffect(Unit) {
         customCategoryKeys = runCatching { repo.listCustomCategoryKeys() }.getOrDefault(emptyList())
+        recentTags = runCatching { repo.recentTags() }.getOrDefault(emptyList())
     }
 
     Column(
@@ -2348,24 +3253,17 @@ fun SearchScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .combinedClickable(
-                                onClick = { retagTarget = tx },
+                                onClick = { retagLaunch = RetagLaunch(tx, initialTab = 0) },
                                 onLongClick = { detailTarget = tx },
                             )
                             .padding(vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(tx.merchantRaw, fontWeight = FontWeight.SemiBold, color = Ink)
-                            Text(
-                                searchListSubtitle(tx),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Mute,
-                            )
-                        }
-                        Text(
-                            tx.amountPaise.paiseToCompactRupees(),
-                            fontWeight = FontWeight.SemiBold,
-                            color = Debit,
+                        TransactionRowContent(
+                            tx = tx,
+                            subtitle = searchListSubtitle(tx),
+                            onAddTag = { retagLaunch = RetagLaunch(tx, initialTab = 1) },
+                            onDuplicateChip = { duplicateTarget = tx },
                         )
                     }
                     HorizontalDivider(color = Line)
@@ -2374,30 +3272,41 @@ fun SearchScreen(
         }
     }
 
-    retagTarget?.let { tx ->
+    retagLaunch?.let { launch ->
+        val tx = results.firstOrNull { it.id == launch.tx.id } ?: launch.tx
         RetagSheet(
             transaction = tx,
             hasApiKey = hasApiKey,
             customCategoryKeys = customCategoryKeys,
-            onDismiss = { retagTarget = null },
+            recentTags = recentTags,
+            initialTab = launch.initialTab,
+            onDismiss = { retagLaunch = null },
             onSave = { categoryKey, applyAll ->
                 scope.launch {
                     repo.retag(tx.id, categoryKey, applyAll)
-                    retagTarget = null
+                    retagLaunch = null
                     customCategoryKeys =
                         runCatching { repo.listCustomCategoryKeys() }.getOrDefault(customCategoryKeys)
+                }
+            },
+            onSaveTag = { tag ->
+                scope.launch {
+                    repo.setTransactionNote(tx.id, tag)
+                    recentTags = runCatching { repo.recentTags() }.getOrDefault(recentTags)
+                    retagLaunch = null
                 }
             },
             onAskGemini = { applyAll ->
                 scope.launch {
                     repo.askGeminiForTransaction(tx.id, applyAll)
-                    retagTarget = null
+                    retagLaunch = null
                 }
             },
         )
     }
 
-    detailTarget?.let { tx ->
+    detailTarget?.let { snap ->
+        val tx = results.firstOrNull { it.id == snap.id } ?: snap
         TransactionDetailSheet(
             transaction = tx,
             hasApiKey = hasApiKey,
@@ -2405,7 +3314,7 @@ fun SearchScreen(
             onDismiss = { detailTarget = null },
             onChangeCategory = {
                 detailTarget = null
-                retagTarget = tx
+                retagLaunch = RetagLaunch(tx, initialTab = 0)
             },
             onReportWrong = {
                 scope.launch {
@@ -2416,16 +3325,27 @@ fun SearchScreen(
             },
         )
     }
+    duplicateTarget?.let { snap ->
+        val tx = results.firstOrNull { it.id == snap.id } ?: snap
+        DuplicateStatusSheet(
+            transaction = tx,
+            repo = repo,
+            onDismiss = { duplicateTarget = null },
+        )
+    }
 }
 
 @Composable
 fun TrendsScreen(
     viewModel: TrendsViewModel,
+    hasApiKey: Boolean,
     onBack: () -> Unit,
     onOpenCategory: (CategoryBucket) -> Unit,
 ) {
-    val weekly by viewModel.weekly.collectAsStateWithLifecycle()
+    val monthly by viewModel.monthly.collectAsStateWithLifecycle()
     val iconNames by viewModel.iconNames.collectAsStateWithLifecycle()
+    val insight by viewModel.insight.collectAsStateWithLifecycle()
+    val insightLoading by viewModel.insightLoading.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -2437,11 +3357,11 @@ fun TrendsScreen(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
             }
-            Text("Trends · week by week", style = MaterialTheme.typography.titleLarge, color = Ink)
+            Text("Trends · month by month", style = MaterialTheme.typography.titleLarge, color = Ink)
         }
         Spacer(modifier = Modifier.height(8.dp))
         when {
-            weekly == null -> {
+            monthly == null -> {
                 Text(
                     "Loading…",
                     style = MaterialTheme.typography.bodyMedium,
@@ -2449,29 +3369,37 @@ fun TrendsScreen(
                     modifier = Modifier.padding(vertical = 24.dp),
                 )
             }
-            weekly!!.ranks.isEmpty() -> {
+            monthly!!.ranks.isEmpty() -> {
                 Text(
-                    "No spend in the last 8 weeks yet",
+                    "No spend in the last ${DateRanges.TRENDS_MONTH_COUNT} months yet",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Mute,
                     modifier = Modifier.padding(vertical = 24.dp),
                 )
             }
             else -> {
-                val snap = weekly!!
+                val snap = monthly!!
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     item(key = "chart") {
-                        WeeklySpendChartCard(snap = snap)
+                        MonthlySpendChartCard(snap = snap)
+                    }
+                    item(key = "insight") {
+                        TrendsInsightCard(
+                            hasApiKey = hasApiKey,
+                            insight = insight,
+                            loading = insightLoading,
+                            onExplain = viewModel::explainTrends,
+                        )
                     }
                     item(key = "top-hdr") {
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text("Top spends · last 8 weeks", style = MaterialTheme.typography.titleMedium, color = Ink)
+                        Text("Top spends · this month", style = MaterialTheme.typography.titleMedium, color = Ink)
                         Text(
-                            "This week vs last week",
+                            "Amounts match the category detail for this month · MoM vs last month",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Mute,
                         )
@@ -2489,9 +3417,13 @@ fun TrendsScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun WeeklySpendChartCard(snap: WeeklySpendTrend) {
+private fun TrendsInsightCard(
+    hasApiKey: Boolean,
+    insight: String?,
+    loading: Boolean,
+    onExplain: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2500,20 +3432,80 @@ private fun WeeklySpendChartCard(snap: WeeklySpendTrend) {
             .border(1.dp, Line, RoundedCornerShape(18.dp))
             .padding(14.dp),
     ) {
-        Text("Spend by week", style = MaterialTheme.typography.labelMedium, color = Mute)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("What changed", style = MaterialTheme.typography.labelMedium, color = Mute)
+            if (hasApiKey) {
+                TextButton(onClick = onExplain, enabled = !loading) {
+                    if (loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            color = MintDeep,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text(
+                        if (insight == null) "Ask Gemini" else "Refresh",
+                        color = MintDeep,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+            }
+        }
+        when {
+            !hasApiKey -> Text(
+                "Add a Gemini key in Settings to get a short read on MoM shifts and shops that dominate a category.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Mute,
+            )
+            loading && insight == null -> Text(
+                "Looking at this month vs last…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Mute,
+            )
+            insight != null -> Text(
+                insight,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Ink,
+            )
+            else -> Text(
+                "Tap Ask Gemini for things like “Food is up vs last month” or “Amazon is most of Shopping”.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Mute,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MonthlySpendChartCard(snap: MonthlySpendTrend) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(PaperRaised)
+            .border(1.dp, Line, RoundedCornerShape(18.dp))
+            .padding(14.dp),
+    ) {
+        Text("Spend by month", style = MaterialTheme.typography.labelMedium, color = Mute)
         Text(
-            snap.windowTotalPaise.paiseToCompactRupees(),
+            snap.thisMonthTotalPaise.paiseToCompactRupees(),
             style = MaterialTheme.typography.headlineMedium,
             color = Debit,
             fontWeight = FontWeight.SemiBold,
         )
         Text(
-            "Last ${snap.weeks.size} weeks · debits only",
+            "This month · last ${snap.months.size} months in chart · debits only",
             style = MaterialTheme.typography.bodyMedium,
             color = Mute,
         )
         Spacer(modifier = Modifier.height(12.dp))
-        WeeklyStackedBars(snap = snap)
+        MonthlyStackedBars(snap = snap)
         Spacer(modifier = Modifier.height(10.dp))
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2537,7 +3529,7 @@ private fun WeeklySpendChartCard(snap: WeeklySpendTrend) {
                     )
                 }
             }
-            if (snap.otherByWeek.any { it > 0 }) {
+            if (snap.otherByMonth.any { it > 0 }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -2554,14 +3546,14 @@ private fun WeeklySpendChartCard(snap: WeeklySpendTrend) {
 }
 
 @Composable
-private fun WeeklyStackedBars(snap: WeeklySpendTrend) {
-    val weekTotals = remember(snap) {
-        snap.weeks.indices.map { i ->
+private fun MonthlyStackedBars(snap: MonthlySpendTrend) {
+    val monthTotals = remember(snap) {
+        snap.months.indices.map { i ->
             snap.topKeys.sumOf { key -> snap.series[key]?.getOrElse(i) { 0L } ?: 0L } +
-                snap.otherByWeek.getOrElse(i) { 0L }
+                snap.otherByMonth.getOrElse(i) { 0L }
         }
     }
-    val maxTotal = (weekTotals.maxOrNull() ?: 1L).coerceAtLeast(1L)
+    val maxTotal = (monthTotals.maxOrNull() ?: 1L).coerceAtLeast(1L)
     val otherColor = Mute.copy(alpha = 0.55f)
 
     Column {
@@ -2570,10 +3562,10 @@ private fun WeeklyStackedBars(snap: WeeklySpendTrend) {
                 .fillMaxWidth()
                 .height(200.dp),
         ) {
-            val n = snap.weeks.size.coerceAtLeast(1)
+            val n = snap.months.size.coerceAtLeast(1)
             val gap = 6.dp.toPx()
             val barWidth = ((size.width - gap * (n - 1)) / n).coerceAtLeast(8.dp.toPx())
-            snap.weeks.indices.forEach { i ->
+            snap.months.indices.forEach { i ->
                 val x = i * (barWidth + gap)
                 var yBottom = size.height
                 val stack = buildList {
@@ -2581,10 +3573,9 @@ private fun WeeklyStackedBars(snap: WeeklySpendTrend) {
                         val v = snap.series[key]?.getOrElse(i) { 0L } ?: 0L
                         if (v > 0) add(CategoryColors.forKey(key) to v)
                     }
-                    val other = snap.otherByWeek.getOrElse(i) { 0L }
+                    val other = snap.otherByMonth.getOrElse(i) { 0L }
                     if (other > 0) add(otherColor to other)
                 }
-                // Draw from bottom: Other first then smaller? Plan: stack top categories - typically largest at bottom or top. Draw in reverse so top keys appear lower to higher in list order from bottom.
                 stack.forEach { (color, paise) ->
                     val h = (paise.toFloat() / maxTotal.toFloat()) * size.height
                     drawRect(
@@ -2598,9 +3589,9 @@ private fun WeeklyStackedBars(snap: WeeklySpendTrend) {
         }
         Spacer(modifier = Modifier.height(6.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
-            snap.weeks.forEach { week ->
+            snap.months.forEach { month ->
                 Text(
-                    shortWeekLabel(week),
+                    shortMonthLabel(month),
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.labelMedium,
                     color = Mute,
@@ -2613,24 +3604,21 @@ private fun WeeklyStackedBars(snap: WeeklySpendTrend) {
     }
 }
 
-private fun shortWeekLabel(week: WeekWindow): String = when (week.weeksAgo) {
+private fun shortMonthLabel(month: MonthWindow): String = when (month.monthsAgo) {
     0 -> "Now"
     1 -> "Last"
-    else -> {
-        val fmt = java.text.SimpleDateFormat("d", java.util.Locale.getDefault())
-        fmt.format(week.startMs)
-    }
+    else -> month.shortLabel()
 }
 
 @Composable
 private fun TopSpendTrendCard(
-    rank: CategoryWeekRank,
+    rank: CategoryMonthRank,
     iconName: String?,
     onClick: () -> Unit,
 ) {
     val accent = CategoryColors.forKey(rank.bucket.key)
     val icon = CategoryIcons.forKey(rank.bucket.key, iconName)
-    val wow = wowLabel(rank.thisWeekPaise, rank.lastWeekPaise)
+    val mom = momLabel(rank.thisMonthPaise, rank.lastMonthPaise)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2668,18 +3656,18 @@ private fun TopSpendTrendCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    wow,
+                    mom,
                     style = MaterialTheme.typography.bodyMedium,
                     color = when {
-                        rank.lastWeekPaise <= 0L && rank.thisWeekPaise > 0L -> MintDeep
-                        rank.thisWeekPaise > rank.lastWeekPaise -> Debit
-                        rank.thisWeekPaise < rank.lastWeekPaise -> Ok
+                        rank.lastMonthPaise <= 0L && rank.thisMonthPaise > 0L -> MintDeep
+                        rank.thisMonthPaise > rank.lastMonthPaise -> Debit
+                        rank.thisMonthPaise < rank.lastMonthPaise -> Ok
                         else -> Mute
                     },
                 )
             }
             Text(
-                rank.totalPaise.paiseToCompactRupees(),
+                rank.thisMonthPaise.paiseToCompactRupees(),
                 fontWeight = FontWeight.SemiBold,
                 color = Debit,
             )
@@ -2687,15 +3675,15 @@ private fun TopSpendTrendCard(
     }
 }
 
-private fun wowLabel(thisWeek: Long, lastWeek: Long): String = when {
-    lastWeek <= 0L && thisWeek <= 0L -> "No spend this or last week"
-    lastWeek <= 0L && thisWeek > 0L -> "New this week · ${thisWeek.paiseToCompactRupees()}"
-    thisWeek == lastWeek -> "Same as last week"
+private fun momLabel(thisMonth: Long, lastMonth: Long): String = when {
+    lastMonth <= 0L && thisMonth <= 0L -> "No spend this or last month"
+    lastMonth <= 0L && thisMonth > 0L -> "New this month · ${thisMonth.paiseToCompactRupees()}"
+    thisMonth == lastMonth -> "Same as last month"
     else -> {
-        val pct = (((thisWeek - lastWeek).toDouble() / lastWeek.toDouble()) * 100.0)
+        val pct = (((thisMonth - lastMonth).toDouble() / lastMonth.toDouble()) * 100.0)
             .roundToInt()
         val arrow = if (pct > 0) "↑" else "↓"
-        "$arrow${kotlin.math.abs(pct)}% vs last week"
+        "$arrow ${kotlin.math.abs(pct)}% vs last month"
     }
 }
 
@@ -2839,78 +3827,85 @@ fun MyBanksSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Post-sync duplicate review: pages through suspected pairs one at a time
+ * using the shared [DuplicateCompareSheet]. Decided pairs are removed from
+ * [pairs] by the view model; skipped pairs stay and are tracked locally.
+ */
 @Composable
 fun DuplicateReviewSheet(
-    pairs: List<app.smspend.data.DuplicatePairCandidate>,
-    onRemove: () -> Unit,
+    pairs: List<DuplicatePairCandidate>,
+    onKeepBoth: (String) -> Unit,
+    onMuteLater: (String) -> Unit,
+    onRemoveLater: (Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = PaperRaised,
+    val initialTotal = remember { pairs.size }
+    var skippedIds by remember { mutableStateOf(setOf<String>()) }
+    val current = pairs.firstOrNull { it.pairId !in skippedIds }
+    LaunchedEffect(current == null) {
+        if (current == null) onDismiss()
+    }
+    if (current == null) return
+    val decided = (initialTotal - pairs.size).coerceAtLeast(0)
+    val position = (decided + skippedIds.size + 1).coerceIn(1, initialTotal)
+    DuplicateCompareSheet(
+        pair = current,
+        positionLabel = "Pair $position of $initialTotal",
+        onKeepBoth = { onKeepBoth(current.pairId) },
+        onMute = { onMuteLater(current.pairId) },
+        onDelete = { onRemoveLater(current.laterId) },
+        onSkip = { skippedIds = skippedIds + current.pairId },
+        dismissLabel = "Later",
+        onDismiss = onDismiss,
+    )
+}
+
+@Composable
+private fun DuplicateSideBlock(
+    title: String,
+    titleColor: Color,
+    merchant: String,
+    timeLabel: String,
+    sender: String,
+    note: String,
+    snippet: String,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(PaperRaised)
+            .border(1.dp, Line, RoundedCornerShape(10.dp))
+            .padding(10.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp)
-                .height(480.dp),
-        ) {
-            Text("Possible duplicates", style = MaterialTheme.typography.titleLarge, color = Ink)
+        Text(title, style = MaterialTheme.typography.labelMedium, color = titleColor)
+        Text(
+            merchant.ifBlank { "Unknown" },
+            fontWeight = FontWeight.SemiBold,
+            color = Ink,
+        )
+        Text(
+            "$timeLabel · $sender",
+            style = MaterialTheme.typography.bodySmall,
+            color = Mute,
+        )
+        if (note.isNotBlank()) {
             Text(
-                "Same amount within 24h. Keeping the earlier SMS; remove later copies.",
-                style = MaterialTheme.typography.bodyMedium,
+                note,
+                style = MaterialTheme.typography.bodySmall,
                 color = Mute,
             )
-            Spacer(modifier = Modifier.height(10.dp))
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                items(pairs, key = { it.pairId }) { pair ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Paper)
-                            .padding(12.dp),
-                    ) {
-                        Text(
-                            pair.amountPaise.paiseToCompactRupees(),
-                            fontWeight = FontWeight.SemiBold,
-                            color = Ink,
-                        )
-                        Text(
-                            "Keep · ${pair.earlierSender}\n${pair.earlierSnippet}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Mute,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "Remove · ${pair.laterSender}\n${pair.laterSnippet}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Debit,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-            Button(
-                onClick = onRemove,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
-                shape = RoundedCornerShape(14.dp),
-            ) {
-                Text("Remove ${pairs.size} duplicates")
-            }
-            TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
-                Text("Keep all", color = Mute)
-            }
-            Spacer(modifier = Modifier.height(12.dp))
         }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            snippet,
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            color = Ink,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.heightIn(max = 140.dp),
+        )
     }
 }
 

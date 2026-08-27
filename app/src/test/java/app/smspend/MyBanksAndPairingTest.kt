@@ -1,6 +1,7 @@
 package app.smspend
 
 import app.smspend.data.CreditSmsParser
+import app.smspend.data.CrossSourcePoint
 import app.smspend.data.SmsDebitParser
 import app.smspend.data.TransactionEntity
 import app.smspend.domain.IndianBanks
@@ -55,6 +56,7 @@ class MyBanksAndPairingTest {
             dedupKey = "x",
         )
         val credit = CreditSmsParser.parseCredit(creditBody, "JK-BOBSMS-S", t0 + 1_000)!!
+        assertTrue(credit.merchantRaw.isNotBlank())
         val pairs = CreditSmsParser.selfTransferDebitIds(
             debits = listOf(debit),
             credits = listOf(credit),
@@ -92,5 +94,29 @@ class MyBanksAndPairingTest {
             declaredBankIds = setOf("hdfc", "federal"),
         )
         assertEquals(1, pairs.size)
+    }
+
+    @Test
+    fun bankSameMerchant_doesNotCollapseOpaqueBankTransfers() {
+        val t0 = 1_000_000L
+        val a = CrossSourcePoint(
+            id = 1,
+            amountPaise = 2_000_000L,
+            occurredAt = t0,
+            merchantKey = "bank transfer",
+            isBank = true,
+            bodySnippet = "NEFT A",
+        )
+        val b = CrossSourcePoint(
+            id = 2,
+            amountPaise = 2_000_000L,
+            occurredAt = t0 + 60_000,
+            merchantKey = "bank transfer",
+            isBank = true,
+            bodySnippet = "NEFT B",
+        )
+        assertTrue(
+            SmsDebitParser.bankSameMerchantDuplicateIds(listOf(a, b)).isEmpty(),
+        )
     }
 }

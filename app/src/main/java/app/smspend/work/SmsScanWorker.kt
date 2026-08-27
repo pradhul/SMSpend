@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import app.smspend.notify.SmSpendNotifications
 import app.smspend.smSpend
+import app.smspend.data.DiagLog
 import app.smspend.widget.SpendWidgetUpdater
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
@@ -30,15 +31,56 @@ class SmsScanWorker(
         if (!hasSms) return Result.success()
 
         return runCatching {
+            DiagLog.i("worker", "scan_worker_start")
             val result = app.repository.scanInbox(forceFullMonth = false)
-            if (result.newTransactions > 0) {
-                SmSpendNotifications.notifyNewSpends(applicationContext, result.newTransactions)
+            if (result.newDebitTransactions > 0) {
+                SmSpendNotifications.notifyNewSpends(applicationContext, result.newDebitTransactions)
+            }
+            // Batched Gemini pass over PENDING rows; failures stay PENDING and retry
+            // on the next periodic scan, so they must not fail (or retry) the worker.
+            val ai = runCatching { app.repository.runAiCategorizationPass() }
+                .onFailure { e ->
+                    DiagLog.e(
+                        "worker",
+                        "ai_pass_exception",
+                        mapOf("message" to (e.message ?: "unknown")),
+                    )
+                }
+                .getOrNull()
+            if (ai != null) {
+                DiagLog.i(
+                    "worker",
+                    "ai_pass_result",
+                    mapOf(
+                        "pending" to ai.pending,
+                        "applied" to ai.applied,
+                        "fromMemory" to ai.fromMemory,
+                        "failed" to ai.failed,
+                        "error" to ai.error,
+                    ),
+                )
             }
             app.repository.processPostScanAlerts(applicationContext)
             app.repository.refreshRecurringMerchants()
             SpendWidgetUpdater.update(applicationContext)
+            DiagLog.i(
+                "worker",
+                "scan_worker_ok",
+                mapOf(
+                    "scannedSms" to result.scannedSms,
+                    "newTransactions" to result.newTransactions,
+                    "newDebitTransactions" to result.newDebitTransactions,
+                ),
+            )
             Result.success()
-        }.getOrElse { Result.retry() }
+        }.getOrElse { e ->
+            DiagLog.e(
+                "worker",
+                "scan_worker_fail",
+                mapOf("message" to (e.message ?: "unknown")),
+            )
+            Result.retry()
+        }
     }
 
     companion object {

@@ -36,6 +36,26 @@ data class MerchantForCategorize(
     val bodySnippet: String,
 )
 
+/** One pending transaction for the batched Gemini-first categorization pass. */
+data class TxForAiCategorize(
+    val id: Long,
+    val merchantRaw: String,
+    val amountPaise: Long,
+    val sender: String,
+    val bodySnippet: String,
+)
+
+/**
+ * Few-shot example for the batch prompt. Corrections carry the SMS snippet and the
+ * category the user moved away from; merchant-memory examples are just merchant → label.
+ */
+data class AiCategoryExample(
+    val merchant: String,
+    val categoryLabel: String,
+    val snippet: String = "",
+    val correctedFromLabel: String? = null,
+)
+
 data class DuplicatePairCandidate(
     val pairId: String,
     val earlierId: Long,
@@ -45,6 +65,12 @@ data class DuplicatePairCandidate(
     val laterSender: String,
     val earlierSnippet: String,
     val laterSnippet: String,
+    val earlierMerchant: String = "",
+    val laterMerchant: String = "",
+    val earlierAt: Long = 0L,
+    val laterAt: Long = 0L,
+    val earlierNote: String = "",
+    val laterNote: String = "",
 )
 
 data class UpcomingSpendHint(
@@ -53,6 +79,13 @@ data class UpcomingSpendHint(
     val cadenceDays: Int,
     val lastOccurredAt: Long,
     val nextExpectedAt: Long,
+)
+
+data class TrendsExplainHint(
+    val categoryLabel: String,
+    val thisMonthPaise: Long,
+    val lastMonthPaise: Long,
+    val topMerchants: List<Pair<String, Long>>,
 )
 
 class GeminiCategorizer(
@@ -70,7 +103,26 @@ class GeminiCategorizer(
         )
         private const val COOLDOWN_MS = 60_000L
         const val BATCH_SIZE = 25
+
+        /** Transactions per Gemini call in the batched categorization pass. */
+        const val AI_BATCH_SIZE = 80
         const val DUPLICATE_NOTE = "Possible duplicate"
+
+        /** Structured-output schema: [{"id": 12, "category": "Food & dining"}, …]. */
+        private val ID_CATEGORY_ARRAY_SCHEMA: JSONObject = JSONObject()
+            .put("type", "ARRAY")
+            .put(
+                "items",
+                JSONObject()
+                    .put("type", "OBJECT")
+                    .put(
+                        "properties",
+                        JSONObject()
+                            .put("id", JSONObject().put("type", "INTEGER"))
+                            .put("category", JSONObject().put("type", "STRING")),
+                    )
+                    .put("required", JSONArray().put("id").put("category")),
+            )
     }
 
     @Volatile private var preferredModel: String? = null
@@ -120,6 +172,38 @@ class GeminiCategorizer(
     }
 
     /**
+     * Gemini-first batch categorization: classifies up to [AI_BATCH_SIZE] transactions
+     * against the user's own taxonomy (presets + custom labels), primed with their past
+     * retag corrections as few-shot examples. Uses structured output (responseSchema) so
+     * the response is guaranteed parseable JSON. Returns transaction id → storage key
+     * (preset name or custom:…); ids answered "Other" are omitted.
+     */
+    suspend fun categorizeTransactions(
+        apiKey: String,
+        items: List<TxForAiCategorize>,
+        customCategoryLabels: List<String>,
+        examples: List<AiCategoryExample>,
+        selfAliases: List<String>,
+    ): Pair<Map<Long, String>, GeminiResult.Failure?> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank() || items.isEmpty()) {
+            return@withContext emptyMap<Long, String>() to null
+        }
+        val batch = items.take(AI_BATCH_SIZE)
+        val prompt = aiBatchPrompt(batch, customCategoryLabels, examples, selfAliases)
+        val result = generateContent(
+            apiKey,
+            prompt,
+            jsonMode = true,
+            responseSchema = ID_CATEGORY_ARRAY_SCHEMA,
+        )
+        when (result) {
+            is GeminiResult.Success ->
+                parseIdCategories(result.text, batch.map { it.id }.toSet()) to null
+            is GeminiResult.Failure -> emptyMap<Long, String>() to result
+        }
+    }
+
+    /**
      * Plain-language explanation of why recurring merchants look due soon.
      */
     suspend fun explainUpcomingSpends(
@@ -130,6 +214,18 @@ class GeminiCategorizer(
         if (apiKey.isBlank()) return@withContext GeminiResult.Failure(400, "API key is empty")
         if (items.isEmpty()) return@withContext GeminiResult.Failure(400, "No recurring merchants")
         generateContent(apiKey, upcomingExplainPrompt(items, nowMs), jsonMode = false)
+    }
+
+    /**
+     * Short Trends commentary: MoM category shifts and merchant concentration.
+     */
+    suspend fun explainTrends(
+        apiKey: String,
+        items: List<TrendsExplainHint>,
+    ): GeminiResult = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext GeminiResult.Failure(400, "API key is empty")
+        if (items.isEmpty()) return@withContext GeminiResult.Failure(400, "No spend data")
+        generateContent(apiKey, trendsExplainPrompt(items), jsonMode = false)
     }
 
     /**
@@ -204,12 +300,13 @@ class GeminiCategorizer(
         apiKey: String,
         prompt: String,
         jsonMode: Boolean,
+        responseSchema: JSONObject? = null,
     ): GeminiResult {
         val models = orderedModels()
         var lastFailure: GeminiResult.Failure? = null
         for (model in models) {
             if (isCooling(model)) continue
-            val outcome = callModel(apiKey, model, prompt, jsonMode)
+            val outcome = callModel(apiKey, model, prompt, jsonMode, responseSchema)
             when (outcome) {
                 is GeminiResult.Success -> {
                     preferredModel = model
@@ -237,8 +334,9 @@ class GeminiCategorizer(
         apiKey: String,
         prompt: String,
         jsonMode: Boolean,
+        responseSchema: JSONObject? = null,
     ): GeminiResult = withContext(Dispatchers.IO) {
-        generateContentSync(apiKey, prompt, jsonMode)
+        generateContentSync(apiKey, prompt, jsonMode, responseSchema)
     }
 
     private fun orderedModels(): List<String> {
@@ -265,6 +363,7 @@ class GeminiCategorizer(
         model: String,
         prompt: String,
         jsonMode: Boolean,
+        responseSchema: JSONObject? = null,
     ): GeminiResult {
         val payload = JSONObject()
             .put(
@@ -277,10 +376,11 @@ class GeminiCategorizer(
                 ),
             )
         if (jsonMode) {
-            payload.put(
-                "generationConfig",
-                JSONObject().put("responseMimeType", "application/json"),
-            )
+            val config = JSONObject().put("responseMimeType", "application/json")
+            if (responseSchema != null) {
+                config.put("responseSchema", responseSchema)
+            }
+            payload.put("generationConfig", config)
         }
         val body = payload.toString().toRequestBody("application/json".toMediaType())
         val url =
@@ -292,10 +392,20 @@ class GeminiCategorizer(
                     val apiMsg = runCatching {
                         JSONObject(raw).optJSONObject("error")?.optString("message")
                     }.getOrNull()?.takeIf { it.isNotBlank() }
-                    return@use GeminiResult.Failure(
+                    val failure = GeminiResult.Failure(
                         code = response.code,
                         message = apiMsg ?: "Gemini error ${response.code} ($model)",
                     )
+                    DiagLog.e(
+                        "gemini",
+                        "http_fail",
+                        mapOf(
+                            "model" to model,
+                            "code" to failure.code,
+                            "message" to failure.message,
+                        ),
+                    )
+                    return@use failure
                 }
                 val text = JSONObject(raw)
                     .optJSONArray("candidates")
@@ -307,12 +417,37 @@ class GeminiCategorizer(
                     ?.trim()
                     .orEmpty()
                 if (text.isBlank()) {
+                    DiagLog.w(
+                        "gemini",
+                        "empty_response",
+                        mapOf(
+                            "model" to model,
+                            "code" to response.code,
+                            "rawLen" to raw.length,
+                        ),
+                    )
                     GeminiResult.Failure(response.code, "Empty Gemini response ($model)")
                 } else {
+                    DiagLog.i(
+                        "gemini",
+                        "ok",
+                        mapOf(
+                            "model" to model,
+                            "textLen" to text.length,
+                        ),
+                    )
                     GeminiResult.Success(text = text, model = model)
                 }
             }
         }.getOrElse { e ->
+            DiagLog.e(
+                "gemini",
+                "network_error",
+                mapOf(
+                    "model" to model,
+                    "message" to (e.message ?: "Network error"),
+                ),
+            )
             GeminiResult.Failure(-1, e.message ?: "Network error")
         }
     }
@@ -321,7 +456,11 @@ class GeminiCategorizer(
 
     private fun categoryList(): String =
         SpendCategory.entries
-            .filter { it != SpendCategory.OTHER }
+            .filter {
+                it != SpendCategory.OTHER &&
+                    it != SpendCategory.CREDITS &&
+                    it != SpendCategory.SELF_TRANSFER
+            }
             .joinToString(", ") { it.label } + ", Health, Education"
 
     private fun singleCategorizePrompt(merchant: String, smsSnippet: String): String = """
@@ -363,13 +502,87 @@ class GeminiCategorizer(
         """.trimIndent()
     }
 
+    private fun aiBatchPrompt(
+        batch: List<TxForAiCategorize>,
+        customCategoryLabels: List<String>,
+        examples: List<AiCategoryExample>,
+        selfAliases: List<String>,
+    ): String {
+        val presetLabels = SpendCategory.entries
+            .filter {
+                it != SpendCategory.OTHER &&
+                    it != SpendCategory.CREDITS &&
+                    it != SpendCategory.SELF_TRANSFER
+            }
+            .map { it.label }
+        val customs = (customCategoryLabels + listOf("Health", "Education"))
+            .map { it.trim() }
+            .filter { label -> label.isNotBlank() && presetLabels.none { it.equals(label, ignoreCase = true) } }
+            .distinctBy { it.lowercase() }
+
+        val exampleLines = examples.joinToString("\n") { ex ->
+            buildString {
+                append("- \"${ex.merchant}\" → ${ex.categoryLabel}")
+                if (ex.correctedFromLabel != null) {
+                    append(" (user corrected this from ${ex.correctedFromLabel})")
+                }
+                if (ex.snippet.isNotBlank()) {
+                    append(" | sms: ${ex.snippet.take(120)}")
+                }
+            }
+        }
+        val txLines = batch.joinToString("\n") { tx ->
+            "- id=${tx.id} | merchant=${tx.merchantRaw} | amount=₹${tx.amountPaise / 100} | " +
+                "sender=${tx.sender} | sms=${tx.bodySnippet.take(160)}"
+        }
+        val aliasLine = if (selfAliases.isEmpty()) {
+            ""
+        } else {
+            "\nThe account holder's own name(s): ${selfAliases.joinToString(", ")}. " +
+                "Money sent to these names is \"Self transfer\"."
+        }
+        val examplesBlock = if (examples.isEmpty()) {
+            ""
+        } else {
+            """
+            |
+            |How THIS user categorized before — follow these over general knowledge,
+            |especially the corrections:
+            |$exampleLines
+            """.trimMargin()
+        }
+
+        return """
+            You categorize Indian bank/UPI debit SMS for a personal expense tracker.
+
+            Preset categories (use these EXACT labels): ${presetLabels.joinToString(", ")}
+            This user's custom categories (also exact labels): ${customs.joinToString(", ")}
+            If nothing fits, you MAY invent ONE short new category label (1-2 words, e.g. "Pets"),
+            but strongly prefer an existing label. Answer "Other" only as a last resort.
+
+            Guidance:
+            - Savings & investments: RD/SIP/Groww/Zerodha/mutual funds.
+            - EMI & loans: Autopay SI / standing instructions / EMI.
+            - Bills & utilities: Bharat Connect / BBPS / recharges / utility autopay.
+            - Entertainment: liquor/bars/streaming subscriptions.
+            - Transfers: payee is another person's name or a bare UPI handle (P2P payment).
+            - Self transfer: only when the payee is clearly the account holder moving their own money.$aliasLine$examplesBlock
+
+            Transactions to classify:
+            $txLines
+
+            Return a JSON array with EXACTLY one entry per transaction:
+            [{"id":<id>,"category":"<label>"}, ...]
+        """.trimIndent()
+    }
+
     private fun duplicateFlagPrompt(batch: List<DuplicatePairCandidate>): String {
         val lines = batch.joinToString("\n\n") { p ->
             """
             pair_id=${p.pairId}
             amount_paise=${p.amountPaise}
-            A sender=${p.earlierSender} sms=${p.earlierSnippet.take(180)}
-            B sender=${p.laterSender} sms=${p.laterSnippet.take(180)}
+            A merchant=${p.earlierMerchant} sender=${p.earlierSender} sms=${p.earlierSnippet.take(220)}
+            B merchant=${p.laterMerchant} sender=${p.laterSender} sms=${p.laterSnippet.take(220)}
             """.trimIndent()
         }
         return """
@@ -410,6 +623,33 @@ class GeminiCategorizer(
             - If something looks like grocery/delivery rather than a fixed bill, say it may vary.
 
             Merchants:
+            $lines
+        """.trimIndent()
+    }
+
+    private fun trendsExplainPrompt(items: List<TrendsExplainHint>): String {
+        val lines = items.take(8).joinToString("\n") { item ->
+            val merchants = if (item.topMerchants.isEmpty()) {
+                "no merchant breakdown"
+            } else {
+                item.topMerchants.joinToString("; ") { (name, paise) ->
+                    "$name ₹${paise / 100}"
+                }
+            }
+            "- ${item.categoryLabel}: this month ₹${item.thisMonthPaise / 100}, last month ₹${item.lastMonthPaise / 100}; top this month: $merchants"
+        }
+        return """
+            You help an Indian user understand their SMS-based spending Trends.
+            Compare this month vs last month and call out merchant concentration when one shop dominates a category.
+
+            Rules:
+            - Use ONLY the facts below. Do not invent categories, merchants, or amounts.
+            - Write 3–6 short sentences, plain English, friendly and concrete.
+            - Mention at least one clear MoM change (up or down) with the category name.
+            - If one merchant is a large share of a category (e.g. Amazon, Swiggy), say so plainly.
+            - Do not give financial advice or guilt-trip; keep it observational.
+
+            Category facts:
             $lines
         """.trimIndent()
     }
@@ -469,6 +709,45 @@ class GeminiCategorizer(
             if (k in out) continue
             val match = expectedKeys.firstOrNull { it.equals(k, ignoreCase = true) } ?: continue
             putIfOk(match, obj.optString(k))
+        }
+        return out
+    }
+
+    /**
+     * Parses [{"id":12,"category":"Food & dining"}, …] → id → storage key.
+     * Unknown ids and "Other" answers are dropped (caller keeps the provisional category).
+     */
+    fun parseIdCategories(raw: String, expectedIds: Set<Long>): Map<Long, String> {
+        val arr = parseJsonArray(raw)
+        if (arr == null) {
+            DiagLog.w(
+                "gemini",
+                "unparseable_id_categories",
+                mapOf(
+                    "rawLen" to raw.length,
+                    "expected" to expectedIds.size,
+                    "snippet" to DiagLog.truncateSnippet(raw),
+                ),
+            )
+            return emptyMap()
+        }
+        val out = mutableMapOf<Long, String>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val id = obj.optLong("id", Long.MIN_VALUE)
+            if (id !in expectedIds) continue
+            val key = labelToStorageKey(obj.optString("category")) ?: continue
+            out[id] = key
+        }
+        if (out.isEmpty() && expectedIds.isNotEmpty()) {
+            DiagLog.w(
+                "gemini",
+                "empty_id_categories",
+                mapOf(
+                    "rawLen" to raw.length,
+                    "expected" to expectedIds.size,
+                ),
+            )
         }
         return out
     }

@@ -54,7 +54,11 @@ class OtherSmsExporter(
                     .put("merchantRaw", tx.merchantRaw)
                     .put("merchantKey", tx.merchantKey)
                     .put("category", tx.category)
+                    .put("type", tx.type)
                     .put("note", tx.note)
+                    .put("statusTag", tx.statusTag)
+                    .put("cardLast4", tx.cardLast4)
+                    .put("sourceKey", tx.sourceKey)
                     .put("dedupKey", tx.dedupKey)
                     .put("body", body),
             )
@@ -103,7 +107,11 @@ class OtherSmsExporter(
                     .put("merchantRaw", tx.merchantRaw)
                     .put("merchantKey", tx.merchantKey)
                     .put("category", tx.category)
+                    .put("type", tx.type)
                     .put("note", tx.note)
+                    .put("statusTag", tx.statusTag)
+                    .put("cardLast4", tx.cardLast4)
+                    .put("sourceKey", tx.sourceKey)
                     .put("dedupKey", tx.dedupKey)
             }
             items.put(obj)

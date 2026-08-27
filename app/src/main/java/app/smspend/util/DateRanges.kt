@@ -42,6 +42,8 @@ object DateRanges {
     const val HOME_WEEK_COUNT = 8
     /** Current + previous month on the Months pager (plus Pick). */
     const val HOME_MONTH_COUNT = 2
+    /** Months shown on Trends (oldest → newest, including this month). */
+    const val TRENDS_MONTH_COUNT = 6
     const val PICKER_MONTH_COUNT = 24
 
     fun startOfTodayMs(now: Long = System.currentTimeMillis()): Long {
@@ -103,6 +105,10 @@ object DateRanges {
     /** Oldest → newest (left → right); this month is last. */
     fun homeMonths(now: Long = System.currentTimeMillis()): List<MonthWindow> =
         ((HOME_MONTH_COUNT - 1) downTo 0).map { monthWindow(it, now) }
+
+    /** Oldest → newest for Trends stacked chart. */
+    fun trendsMonths(now: Long = System.currentTimeMillis()): List<MonthWindow> =
+        ((TRENDS_MONTH_COUNT - 1) downTo 0).map { monthWindow(it, now) }
 
     fun monthWindowAt(year: Int, month1to12: Int, now: Long = System.currentTimeMillis()): MonthWindow {
         val cal = Calendar.getInstance()

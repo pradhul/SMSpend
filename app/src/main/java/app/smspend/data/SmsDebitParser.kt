@@ -40,13 +40,16 @@ data class CrossSourcePoint(
 
 object SmsDebitParser {
     /** Bump when parsing logic changes so stored transactions get re-checked once. */
-    const val VERSION = 7
+    const val VERSION = 10
 
     /** ± window for bank-vs-merchant cross-source dedup (any merchant app + bank SMS). */
     const val CROSS_SOURCE_WINDOW_MS = 6L * 60 * 60 * 1000
 
     /** Window to match ATM Txn Reversed SMS to a Withdrawn debit. */
     const val ATM_REVERSAL_WINDOW_MS = 24L * 60 * 60 * 1000
+
+    /** ± window to collapse opaque "Amt Deducted NEFT" with named "credited to payee" leg. */
+    const val NEFT_LEG_COLLAPSE_WINDOW_MS = 3L * 60 * 60 * 1000
 
     const val SELF_TRANSFER_PAIR_WINDOW_MS = 5L * 60 * 1000
     const val SELF_TRANSFER_FEDERAL_WINDOW_MS = 2L * 60 * 1000
@@ -55,6 +58,9 @@ object SmsDebitParser {
     const val ATM_FAILED_NOTE = "Failed · reversed"
     const val SELF_RD_WENT_NOTE = "Went to RD"
     const val SELF_RD_FROM_NOTE = "From own account"
+    const val CARD_PAYMENT_NOTE = "Card bill payment"
+    const val CARD_SPEND_TAG_PREFIX = "Card ·"
+    const val CARD_SPEND_TAG_FALLBACK = "Card spend"
 
     /**
      * DLT sender cores for Indian banks. Matched as substring of [senderKey] so
@@ -175,8 +181,21 @@ object SmsDebitParser {
      */
     private val txnRefPatterns = listOf(
         Pattern.compile(
-            """(?i)(?:UPI\s*Ref(?:\s*No)?|Ref(?:erence)?(?:\s*No)?|UTR|RRN|Txn\s*ID)[.:#\s]*([A-Za-z0-9]{6,25})""",
+            """(?i)(?:UPI\s*Ref(?:\s*No)?|Ref(?:erence)?(?:\s*No)?|UTR|RRN|Txn\s*(?:ID|No))[.:#\s]*([A-Za-z0-9]{6,25})""",
         ),
+    )
+
+    /**
+     * HDFC-style outbound NEFT confirmation:
+     * "NEFT money transfer Txn No … has been credited to AMMA SBI on 01-08-2026 …"
+     * Payee is the beneficiary, not the user's own account.
+     */
+    private val neftCreditedToPayeePattern = Pattern.compile(
+        """(?i)\bNEFT\b[^.]*?money transfer\b.*?\bcredited to\s+([A-Za-z0-9 .&'-]{2,60}?)\s+(?:on\b|[.!,]|$)""",
+    )
+
+    private val inboundCreditPayeePrefixes = listOf(
+        "your", "a/c", "acct", "account", "my ", "self",
     )
 
     /**
@@ -235,7 +254,14 @@ object SmsDebitParser {
         banks: List<CrossSourcePoint>,
         windowMs: Long = CROSS_SOURCE_WINDOW_MS,
     ): List<Long> {
-        val onlyBanks = banks.filter { it.isBank && it.merchantKey.isNotBlank() && it.merchantKey != "unknown" }
+        // Opaque Online Banking rows share merchantKey "bank transfer" with no payee —
+        // do not collapse distinct NEFT/IMPS of the same amount.
+        val onlyBanks = banks.filter {
+            it.isBank &&
+                it.merchantKey.isNotBlank() &&
+                it.merchantKey != "unknown" &&
+                it.merchantKey != "bank transfer"
+        }
         val toRemove = mutableSetOf<Long>()
         val byAmount = onlyBanks.groupBy { it.amountPaise }
         for ((_, group) in byAmount) {
@@ -391,6 +417,10 @@ object SmsDebitParser {
         if (otpPattern.matcher(lower).find()) return null
         if (hardBlockers.any { lower.contains(it) }) return null
 
+        // Outbound NEFT confirmation ("credited to <payee>") — before debit/credit gates,
+        // because the body has no debit keyword and "credited" would otherwise reject it.
+        parseNeftCreditedToPayee(text)?.let { return it }
+
         val hasStrong = strongDebitHints.any { lower.contains(it) }
         val hasWeak = weakDebitHints.any { lower.contains(it) }
         if (!hasStrong && !hasWeak) return null
@@ -407,6 +437,133 @@ object SmsDebitParser {
             merchantRaw = merchantRaw.trim().take(80),
             merchantKey = normalizeMerchantKey(merchantRaw),
         )
+    }
+
+    /**
+     * HDFC "NEFT money transfer … has been credited to <payee>" — user's outbound
+     * transfer confirmation. Rejects inbound credits ("credited to your a/c").
+     */
+    fun parseNeftCreditedToPayee(body: String): ParsedDebit? {
+        val text = body.replace('\n', ' ').trim()
+        val m = neftCreditedToPayeePattern.matcher(text)
+        if (!m.find()) return null
+        val payee = m.group(1)
+            ?.trim()
+            ?.trimEnd('.', ',', ';', ' ')
+            ?.trim()
+            .orEmpty()
+        if (payee.length < 2) return null
+        val payeeLower = payee.lowercase(Locale.US)
+        if (inboundCreditPayeePrefixes.any { payeeLower.startsWith(it) }) return null
+        val amountPaise = extractAmountPaise(text) ?: return null
+        if (amountPaise <= 0) return null
+        return ParsedDebit(
+            amountPaise = amountPaise,
+            merchantRaw = payee.take(80),
+            merchantKey = normalizeMerchantKey(payee),
+        )
+    }
+
+    fun isNeftCreditedToPayee(body: String): Boolean =
+        parseNeftCreditedToPayee(body) != null
+
+    fun isOpaqueBankTransfer(body: String, merchantKey: String = ""): Boolean {
+        if (opaqueBankTransferMerchant(body) != null) return true
+        return merchantKey == "bank transfer"
+    }
+
+    /**
+     * Bank debit that pays a credit-card bill (autopay / CRED / BillDesk / "credit card").
+     * Must NOT match itemized card-spend SMS ("Spent Rs.X On HDFC Bank Card 4062 At MERCHANT").
+     */
+    /**
+     * Bank debit that pays a credit-card bill (autopay / CRED / BillDesk).
+     * Must NOT match itemized card-spend SMS ("Spent Rs.X On HDFC Bank Card 4062 At MERCHANT").
+     * Check [cardLast4] / [looksLikeCardSpend] first before calling this.
+     */
+    fun isCardBillPayment(body: String, merchantRaw: String = ""): Boolean {
+        if (looksLikeCardSpend(body)) return false
+        val hay = "$merchantRaw $body".lowercase(Locale.US)
+        // Avoid matching "spent on your credit card" itemized spends — handled above.
+        if (hay.contains("card bill") || hay.contains("credit card bill") ||
+            hay.contains("cc bill") || (hay.contains("bill payment") && hay.contains("card"))
+        ) {
+            return true
+        }
+        if (hay.contains("si-tad") || hay.contains("autopay si")) return true
+        if (hay.contains("cred club") || hay.contains("cred.club")) return true
+        if (hay.contains("billdesk")) return true
+        // Narrow "credit card" — payment/settlement context only.
+        if ((hay.contains("credit card") || hay.contains("creditcard")) &&
+            (hay.contains("paid") || hay.contains("payment") || hay.contains("bill") ||
+                hay.contains("autopay") || hay.contains("settled"))
+        ) {
+            return true
+        }
+        return false
+    }
+
+    fun looksLikeCardSpend(body: String): Boolean {
+        val lower = body.lowercase(Locale.US)
+        return lower.contains("spent") ||
+            (lower.contains("purchase") && lower.contains("card")) ||
+            (lower.contains("txn") && lower.contains("card") && lower.contains(" at "))
+    }
+
+    /** Last-4 digits from card-spend SMS, or null. */
+    fun extractCardLast4(body: String): String? {
+        if (!looksLikeCardSpend(body)) return null
+        if (!body.lowercase(Locale.US).contains("card")) return null
+        return atmCardLast4.matcher(body).let { m ->
+            if (m.find()) m.group(1) else TransactionEntity.CARD_LAST4_UNKNOWN
+        }
+    }
+
+    /**
+     * Tag for itemized card-spend SMS ("Spent Rs.X On … Card 4062 At MERCHANT").
+     * Returns null for bill payments and non-card SMS. Prefer [extractCardLast4] + cardLast4 column.
+     */
+    fun cardSpendTag(body: String, merchantRaw: String = ""): String? {
+        if (isCardBillPayment(body, merchantRaw)) return null
+        val last4 = extractCardLast4(body) ?: return null
+        return if (last4 == TransactionEntity.CARD_LAST4_UNKNOWN) {
+            CARD_SPEND_TAG_FALLBACK
+        } else {
+            "$CARD_SPEND_TAG_PREFIX$last4"
+        }
+    }
+
+    fun isCardSpendTag(note: String): Boolean {
+        val n = note.trim()
+        return n.equals(CARD_SPEND_TAG_FALLBACK, ignoreCase = true) ||
+            n.startsWith(CARD_SPEND_TAG_PREFIX, ignoreCase = true)
+    }
+
+    /**
+     * When both the opaque "Amt Deducted … NEFT txn" leg and the named
+     * "credited to <payee>" leg exist for the same amount within [windowMs],
+     * drop the opaque row(s) and keep the named payee row.
+     */
+    fun opaqueNeftLegDuplicateIds(
+        txs: List<CrossSourcePoint>,
+        windowMs: Long = NEFT_LEG_COLLAPSE_WINDOW_MS,
+    ): List<Long> {
+        val banks = txs.filter { it.isBank && it.bodySnippet.isNotBlank() }
+        val named = banks.filter { isNeftCreditedToPayee(it.bodySnippet) }
+        val opaque = banks.filter {
+            isOpaqueBankTransfer(it.bodySnippet, it.merchantKey) &&
+                !isNeftCreditedToPayee(it.bodySnippet)
+        }
+        if (named.isEmpty() || opaque.isEmpty()) return emptyList()
+        val toRemove = mutableSetOf<Long>()
+        for (op in opaque) {
+            val hasNamed = named.any { n ->
+                n.amountPaise == op.amountPaise &&
+                    abs(n.occurredAt - op.occurredAt) <= windowMs
+            }
+            if (hasNamed) toRemove += op.id
+        }
+        return toRemove.toList()
     }
 
     /**
@@ -452,14 +609,28 @@ object SmsDebitParser {
         }?.second
     }
 
-    private fun extractMerchant(text: String): String? {
-        val lower = text.lowercase(Locale.US)
-        if (lower.contains("neft txn") && lower.contains("online banking")) {
+    /**
+     * Opaque HDFC-style Online Banking NEFT / IMPS / RTGS / Money Transfer SMS
+     * (no payee name) → stable merchant "Bank transfer".
+     */
+    fun opaqueBankTransferMerchant(body: String): String? {
+        val lower = body.lowercase(Locale.US)
+        val channel =
+            lower.contains("neft") ||
+                lower.contains("imps") ||
+                lower.contains("rtgs") ||
+                lower.contains("money transfer")
+        if (!channel) return null
+        if (lower.contains("online banking") ||
+            (lower.contains("amt deducted") && channel)
+        ) {
             return "Bank transfer"
         }
-        if (lower.contains("money transfer") && lower.contains("online banking")) {
-            return "Bank transfer"
-        }
+        return null
+    }
+
+    internal fun extractMerchant(text: String): String? {
+        opaqueBankTransferMerchant(text)?.let { return it }
 
         val atm = atmWithdrawnAtPattern.matcher(text)
         if (atm.find()) {
@@ -538,16 +709,29 @@ object SmsDebitParser {
 
     /**
      * Stable key for deduplicating the same transaction across re-sent SMS / alternate
-     * DLT headers. Prefer txn-ref + amount; fall back to a hash of the normalized body.
-     * Time is intentionally not used.
+     * DLT headers. Prefer txn-ref + amount; fall back to a hash of the normalized body
+     * plus a minute bucket so date-less identical bodies (e.g. HDFC "Amt Deducted NEFT")
+     * in different months do not collide.
      */
-    fun dedupKey(body: String, amountPaise: Long): String {
+    fun dedupKey(body: String, amountPaise: Long, dateMs: Long = 0L): String {
         val ref = extractTxnRef(body)
         if (ref != null) return "ref:$ref:$amountPaise"
         val normalized = body.lowercase(Locale.US)
             .replace(Regex("""\s+"""), " ")
             .trim()
-        return "body:${normalized.hashCode().toUInt().toString(16)}:$amountPaise"
+        val minute = if (dateMs > 0L) dateMs / 60_000L else 0L
+        return "body:${normalized.hashCode().toUInt().toString(16)}:$amountPaise:$minute"
+    }
+
+    /** Direction-aware dedup so a shared UPI ref debit does not suppress the matching credit. */
+    fun directionalDedupKey(
+        body: String,
+        amountPaise: Long,
+        dateMs: Long,
+        isCredit: Boolean,
+    ): String {
+        val base = dedupKey(body, amountPaise, dateMs)
+        return if (isCredit) "CREDIT:$base" else "DEBIT:$base"
     }
 
     /**

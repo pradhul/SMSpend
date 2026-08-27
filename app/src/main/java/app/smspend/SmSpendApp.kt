@@ -2,6 +2,7 @@ package app.smspend
 
 import android.app.Application
 import android.content.Context
+import app.smspend.data.DiagLog
 import app.smspend.data.SmsDebitParser
 import app.smspend.data.SmsInboxReader
 import app.smspend.data.SmSpendDatabase
@@ -26,6 +27,7 @@ class SmSpendApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        DiagLog.init(this)
         prefs = UserPreferences(this)
         val db = SmSpendDatabase.get(this)
         repository = SpendRepository(
