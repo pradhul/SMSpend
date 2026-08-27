@@ -42,6 +42,8 @@ import app.smspend.domain.CategoryBucket
 import app.smspend.ui.BiometricGate
 import app.smspend.ui.CategoryScreen
 import app.smspend.ui.CategoryViewModel
+import app.smspend.ui.ExportsScreen
+import app.smspend.ui.ExportsViewModel
 import app.smspend.ui.HomeScreen
 import app.smspend.ui.HomeViewModel
 import app.smspend.ui.OnboardingScreen
@@ -174,6 +176,7 @@ private fun SmSpendNav(
                     onOpenSettings = { nav.navigate("settings") },
                     onOpenSearch = { nav.navigate("search") },
                     onOpenTrends = { nav.navigate("trends") },
+                    onOpenExports = { nav.navigate("exports") },
                     onOpenCategory = { bucket, startMs, endMs, title ->
                         nav.navigate(
                             "category/${Uri.encode(bucket.key)}/$startMs/$endMs/${Uri.encode(title)}",
@@ -198,6 +201,17 @@ private fun SmSpendNav(
                             "category/${Uri.encode(bucket.key)}/${month.startMs}/${month.endExclusiveMs}/${Uri.encode(month.title())}",
                         )
                     },
+                )
+            }
+            composable("exports") {
+                val vm: ExportsViewModel = viewModel(
+                    factory = ExportsViewModel.Factory(app.repository, appContext),
+                )
+                val apiKey by app.prefs.geminiApiKey.collectAsStateWithLifecycle(initialValue = "")
+                ExportsScreen(
+                    viewModel = vm,
+                    hasApiKey = apiKey.isNotBlank(),
+                    onBack = { nav.popBackStack() },
                 )
             }
             composable("search") {

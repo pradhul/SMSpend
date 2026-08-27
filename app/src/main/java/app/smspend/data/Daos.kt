@@ -264,6 +264,9 @@ interface RecurringMerchantDao {
     @Query("SELECT * FROM recurring_merchants WHERE nextExpectedAt <= :untilMs ORDER BY nextExpectedAt ASC")
     fun observeDueBy(untilMs: Long): Flow<List<RecurringMerchantEntity>>
 
+    @Query("SELECT * FROM recurring_merchants WHERE nextExpectedAt <= :untilMs ORDER BY nextExpectedAt ASC")
+    suspend fun listDueBy(untilMs: Long): List<RecurringMerchantEntity>
+
     @Query("DELETE FROM recurring_merchants")
     suspend fun clearAll()
 

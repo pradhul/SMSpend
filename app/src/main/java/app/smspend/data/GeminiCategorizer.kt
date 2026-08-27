@@ -86,7 +86,36 @@ data class TrendsExplainHint(
     val thisMonthPaise: Long,
     val lastMonthPaise: Long,
     val topMerchants: List<Pair<String, Long>>,
+    /** Payment counts let Gemini talk about frequency ("weekly vs every two weeks"). */
+    val thisMonthTxnCount: Int = 0,
+    val lastMonthTxnCount: Int = 0,
 )
+
+/**
+ * One bullet of the Trends "What changed" summary.
+ * [tone] drives UI color: more/less/warning/info.
+ */
+data class TrendsBullet(
+    val text: String,
+    val tone: String,
+) {
+    companion object {
+        /** Category costs more than last month. */
+        const val TONE_MORE = "more"
+        /** Category costs less than last month. */
+        const val TONE_LESS = "less"
+        /** A recurring bill looks unpaid/overdue — shown in orange. */
+        const val TONE_WARNING = "warning"
+        const val TONE_INFO = "info"
+
+        fun normalizeTone(raw: String): String = when (raw.trim().lowercase()) {
+            TONE_MORE, "up", "increase" -> TONE_MORE
+            TONE_LESS, "down", "decrease" -> TONE_LESS
+            TONE_WARNING, "warn", "alert" -> TONE_WARNING
+            else -> TONE_INFO
+        }
+    }
+}
 
 class GeminiCategorizer(
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -122,6 +151,38 @@ class GeminiCategorizer(
                             .put("category", JSONObject().put("type", "STRING")),
                     )
                     .put("required", JSONArray().put("id").put("category")),
+            )
+
+        /** Structured-output schema: [{"text": "…", "tone": "more|less|warning|info"}, …]. */
+        private val TRENDS_BULLETS_SCHEMA: JSONObject = JSONObject()
+            .put("type", "ARRAY")
+            .put(
+                "items",
+                JSONObject()
+                    .put("type", "OBJECT")
+                    .put(
+                        "properties",
+                        JSONObject()
+                            .put("text", JSONObject().put("type", "STRING"))
+                            .put("tone", JSONObject().put("type", "STRING")),
+                    )
+                    .put("required", JSONArray().put("text").put("tone")),
+            )
+
+        /** Structured-output schema: [{"date": "yyyy-MM-dd", "label": "…"}, …]. */
+        private val DATE_LABELS_SCHEMA: JSONObject = JSONObject()
+            .put("type", "ARRAY")
+            .put(
+                "items",
+                JSONObject()
+                    .put("type", "OBJECT")
+                    .put(
+                        "properties",
+                        JSONObject()
+                            .put("date", JSONObject().put("type", "STRING"))
+                            .put("label", JSONObject().put("type", "STRING")),
+                    )
+                    .put("required", JSONArray().put("date").put("label")),
             )
     }
 
@@ -217,15 +278,42 @@ class GeminiCategorizer(
     }
 
     /**
-     * Short Trends commentary: MoM category shifts and merchant concentration.
+     * Bullet-point Trends summary: what changed vs last month (amounts + frequency),
+     * plus orange warnings for recurring bills that look unpaid this cycle.
+     * Structured output guarantees parseable [{"text","tone"}] JSON.
      */
-    suspend fun explainTrends(
+    suspend fun summarizeTrends(
         apiKey: String,
-        items: List<TrendsExplainHint>,
+        categories: List<TrendsExplainHint>,
+        overdueBills: List<UpcomingSpendHint>,
+        nowMs: Long = System.currentTimeMillis(),
     ): GeminiResult = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext GeminiResult.Failure(400, "API key is empty")
-        if (items.isEmpty()) return@withContext GeminiResult.Failure(400, "No spend data")
-        generateContent(apiKey, trendsExplainPrompt(items), jsonMode = false)
+        if (categories.isEmpty()) return@withContext GeminiResult.Failure(400, "No spend data")
+        generateContent(
+            apiKey,
+            trendsBulletsPrompt(categories, overdueBills, nowMs),
+            jsonMode = true,
+            responseSchema = TRENDS_BULLETS_SCHEMA,
+        )
+    }
+
+    /**
+     * Labels notable spend dates for the month report (holidays/festivals/landmarks).
+     * Ordinary dates are skipped by the model.
+     */
+    suspend fun annotateSpendDates(
+        apiKey: String,
+        isoDates: List<String>,
+    ): GeminiResult = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext GeminiResult.Failure(400, "API key is empty")
+        if (isoDates.isEmpty()) return@withContext GeminiResult.Failure(400, "No dates")
+        generateContent(
+            apiKey,
+            dateNotesPrompt(isoDates),
+            jsonMode = true,
+            responseSchema = DATE_LABELS_SCHEMA,
+        )
     }
 
     /**
@@ -627,8 +715,18 @@ class GeminiCategorizer(
         """.trimIndent()
     }
 
-    private fun trendsExplainPrompt(items: List<TrendsExplainHint>): String {
-        val lines = items.take(8).joinToString("\n") { item ->
+    private fun trendsBulletsPrompt(
+        categories: List<TrendsExplainHint>,
+        overdueBills: List<UpcomingSpendHint>,
+        nowMs: Long,
+    ): String {
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = nowMs }
+        val dayOfMonth = cal.get(java.util.Calendar.DAY_OF_MONTH)
+        val daysInMonth = cal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+        val monthName = java.text.SimpleDateFormat("MMMM", java.util.Locale.getDefault()).format(nowMs)
+        val dayFmt = java.text.SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault())
+
+        val categoryLines = categories.take(8).joinToString("\n") { item ->
             val merchants = if (item.topMerchants.isEmpty()) {
                 "no merchant breakdown"
             } else {
@@ -636,20 +734,72 @@ class GeminiCategorizer(
                     "$name ₹${paise / 100}"
                 }
             }
-            "- ${item.categoryLabel}: this month ₹${item.thisMonthPaise / 100}, last month ₹${item.lastMonthPaise / 100}; top this month: $merchants"
+            "- ${item.categoryLabel}: this month so far ₹${item.thisMonthPaise / 100} across " +
+                "${item.thisMonthTxnCount} payments, last month (full) ₹${item.lastMonthPaise / 100} " +
+                "across ${item.lastMonthTxnCount} payments; top this month: $merchants"
         }
+        val dayMs = TimeUnit.DAYS.toMillis(1)
+        val overdueBlock = if (overdueBills.isEmpty()) {
+            ""
+        } else {
+            val lines = overdueBills.take(5).joinToString("\n") { bill ->
+                val daysSince = ((nowMs - bill.lastOccurredAt) / dayMs).toInt().coerceAtLeast(0)
+                val cadence = when {
+                    bill.cadenceDays in 6..8 -> "about weekly"
+                    bill.cadenceDays in 25..35 -> "about monthly"
+                    else -> "every ~${bill.cadenceDays} days"
+                }
+                "- ${bill.displayName}: usually ₹${bill.medianPaise / 100}, $cadence, " +
+                    "last paid ${dayFmt.format(bill.lastOccurredAt)} ($daysSince days ago), " +
+                    "was expected by ${dayFmt.format(bill.nextExpectedAt)}"
+            }
+            """
+            |
+            |Recurring payments that have NOT appeared this cycle (detected from past SMS, may be missed bills):
+            |$lines
+            """.trimMargin()
+        }
+
         return """
-            You help an Indian user understand their SMS-based spending Trends.
-            Compare this month vs last month and call out merchant concentration when one shop dominates a category.
+            You write the "What changed" summary for an Indian user's personal spend tracker.
+            All data comes from their bank/UPI debit SMS. Today is $monthName $dayOfMonth of $daysInMonth days,
+            so this month is still in progress — always compare honestly using "so far".
+
+            Category facts (this month so far vs last month full):
+            $categoryLines$overdueBlock
+
+            Write 3 to 7 bullet points as a JSON array: [{"text":"…","tone":"more|less|warning|info"}, …]
 
             Rules:
-            - Use ONLY the facts below. Do not invent categories, merchants, or amounts.
-            - Write 3–6 short sentences, plain English, friendly and concrete.
-            - Mention at least one clear MoM change (up or down) with the category name.
-            - If one merchant is a large share of a category (e.g. Amazon, Swiggy), say so plainly.
-            - Do not give financial advice or guilt-trip; keep it observational.
+            - Use ONLY the facts above. Never invent categories, merchants, bills or amounts.
+            - Lead with the biggest rupee changes vs last month, giving both amounts, e.g.
+              "You have spent ₹2,500 on Alcohol this month so far — ₹1,500 more than all of last month (₹1,000)".
+            - When payment counts changed clearly, describe frequency in brackets, e.g.
+              "(about every week this month vs every two weeks last month)".
+            - For usage-based recurring bills (electricity, water, gas, recharges) phrase the change simply, e.g.
+              "Your electricity bill was ₹100 less than last month".
+            - Add ONE bullet per missed recurring payment with tone "warning", e.g.
+              "Electricity bill (~₹1,200) expected by Mon, Aug 24 hasn't been paid yet".
+            - tone is "more" when the category costs more than last month, "less" when it costs less,
+              "warning" only for missed recurring payments, "info" for other notable facts
+              (e.g. one shop dominating a category).
+            - Each bullet under 25 words, friendly and factual. No advice, no guilt-tripping.
+            - Amounts in whole rupees with the ₹ sign and Indian grouping.
+        """.trimIndent()
+    }
 
-            Category facts:
+    private fun dateNotesPrompt(isoDates: List<String>): String {
+        val lines = isoDates.take(31).joinToString("\n")
+        return """
+            These are calendar dates (yyyy-MM-dd, India) on which a user's spends were recorded from SMS.
+            For each date that is genuinely notable, give a very short label (1–4 words):
+            an Indian public holiday or festival (e.g. "Onam", "Diwali", "Independence Day"),
+            a widely known observance, or a month landmark like "Salary day" for the 1st.
+            Skip ordinary dates entirely — only label a date when you are confident.
+
+            Return a JSON array: [{"date":"yyyy-MM-dd","label":"…"}, …] with ONLY the notable dates.
+
+            Dates:
             $lines
         """.trimIndent()
     }
@@ -748,6 +898,36 @@ class GeminiCategorizer(
                     "expected" to expectedIds.size,
                 ),
             )
+        }
+        return out
+    }
+
+    /** Parses [{"text":"…","tone":"…"}, …] → bullets; unknown tones become info. */
+    fun parseTrendsBullets(raw: String): List<TrendsBullet> {
+        val arr = parseJsonArray(raw) ?: return emptyList()
+        val out = mutableListOf<TrendsBullet>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val text = obj.optString("text").trim().removePrefix("- ").removePrefix("• ").trim()
+            if (text.isEmpty()) continue
+            out += TrendsBullet(
+                text = text,
+                tone = TrendsBullet.normalizeTone(obj.optString("tone")),
+            )
+        }
+        return out
+    }
+
+    /** Parses [{"date":"yyyy-MM-dd","label":"…"}, …] → date → label, dates outside the batch dropped. */
+    fun parseDateLabels(raw: String, expectedDates: Set<String>): Map<String, String> {
+        val arr = parseJsonArray(raw) ?: return emptyMap()
+        val out = mutableMapOf<String, String>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val date = obj.optString("date").trim()
+            val label = obj.optString("label").trim()
+            if (date !in expectedDates || label.isEmpty()) continue
+            out[date] = label
         }
         return out
     }

@@ -16,6 +16,9 @@ import app.smspend.data.SpendRepository
 import app.smspend.data.TransactionEntity
 import app.smspend.data.UserPreferences
 import app.smspend.data.MonthlySpendTrend
+import app.smspend.data.MonthSpendReport
+import app.smspend.data.SpendReportExporter
+import app.smspend.data.TrendsBullet
 import app.smspend.domain.RecurringDetector
 import app.smspend.domain.SpendCategory
 import app.smspend.util.DateRanges
@@ -607,11 +610,14 @@ class TrendsViewModel(
     private val _monthly = MutableStateFlow<MonthlySpendTrend?>(null)
     val monthly: StateFlow<MonthlySpendTrend?> = _monthly
 
-    private val _insight = MutableStateFlow<String?>(null)
-    val insight: StateFlow<String?> = _insight
+    private val _summary = MutableStateFlow<List<TrendsBullet>?>(null)
+    val summary: StateFlow<List<TrendsBullet>?> = _summary
 
-    private val _insightLoading = MutableStateFlow(false)
-    val insightLoading: StateFlow<Boolean> = _insightLoading
+    private val _summaryError = MutableStateFlow<String?>(null)
+    val summaryError: StateFlow<String?> = _summaryError
+
+    private val _summaryLoading = MutableStateFlow(false)
+    val summaryLoading: StateFlow<Boolean> = _summaryLoading
 
     private val iconNamesFlow = repo.observeCategoryIconNames()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
@@ -624,26 +630,110 @@ class TrendsViewModel(
             _monthly.value = snap
             val keys = snap?.ranks?.map { it.bucket.key }.orEmpty()
             runCatching { repo.ensureIconsForCategories(keys) }
+            // Auto-load the "What changed" bullets once per screen open.
+            if (snap != null && snap.ranks.isNotEmpty() && runCatching { repo.hasGeminiKey() }.getOrDefault(false)) {
+                loadSummary()
+            }
         }
     }
 
-    fun explainTrends() {
-        viewModelScope.launch {
-            _insightLoading.value = true
-            _insight.value = null
-            runCatching {
-                val hints = repo.buildTrendsInsightHints()
-                repo.explainTrendsInsight(hints)
-            }
-                .onSuccess { _insight.value = it }
-                .onFailure { _insight.value = it.message ?: "Could not explain trends" }
-            _insightLoading.value = false
-        }
+    fun refreshSummary() {
+        viewModelScope.launch { loadSummary() }
+    }
+
+    private suspend fun loadSummary() {
+        if (_summaryLoading.value) return
+        _summaryLoading.value = true
+        _summaryError.value = null
+        runCatching { repo.trendsSummaryBullets() }
+            .onSuccess { _summary.value = it }
+            .onFailure { _summaryError.value = it.message ?: "Could not summarize trends" }
+        _summaryLoading.value = false
     }
 
     class Factory(private val repo: SpendRepository) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T = TrendsViewModel(repo) as T
+    }
+}
+
+data class ExportsUiState(
+    val report: MonthSpendReport? = null,
+    /** Day-start millis → short Gemini label ("Onam", "Independence Day", "Salary day"). */
+    val dateNotes: Map<Long, String> = emptyMap(),
+    val notesLoading: Boolean = false,
+    val exporting: Boolean = false,
+    val message: String? = null,
+    val messageIsError: Boolean = false,
+)
+
+class ExportsViewModel(
+    private val repo: SpendRepository,
+    context: Context,
+) : ViewModel() {
+    private val exporter = SpendReportExporter(context.applicationContext)
+
+    private val _state = MutableStateFlow(ExportsUiState())
+    val state: StateFlow<ExportsUiState> = _state
+
+    init {
+        viewModelScope.launch {
+            val report = runCatching { repo.monthSpendReport() }.getOrNull()
+            _state.value = _state.value.copy(report = report)
+        }
+    }
+
+    /** Asks Gemini to label notable spend dates (holidays/festivals/landmarks). */
+    fun annotateDates() {
+        val rows = _state.value.report?.rows.orEmpty()
+        if (rows.isEmpty() || _state.value.notesLoading) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(notesLoading = true, message = null)
+            runCatching { repo.annotateReportDates(rows) }
+                .onSuccess { notes ->
+                    _state.value = _state.value.copy(
+                        dateNotes = notes,
+                        notesLoading = false,
+                        message = if (notes.isEmpty()) "No notable dates this month" else null,
+                        messageIsError = false,
+                    )
+                }
+                .onFailure { e ->
+                    _state.value = _state.value.copy(
+                        notesLoading = false,
+                        message = e.message ?: "Could not annotate dates",
+                        messageIsError = true,
+                    )
+                }
+        }
+    }
+
+    /** Saves the report as CSV to Downloads (opens in Google Sheets / Excel). */
+    fun exportCsv() {
+        val report = _state.value.report ?: return
+        if (_state.value.exporting) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(exporting = true, message = null)
+            val result = exporter.exportCsv(report, _state.value.dateNotes)
+            _state.value = _state.value.copy(
+                exporting = false,
+                message = result.error ?: "Saved ${result.fileName} to Downloads",
+                messageIsError = result.error != null,
+            )
+        }
+    }
+
+    fun consumeMessage() {
+        _state.value = _state.value.copy(message = null)
+    }
+
+    class Factory(
+        private val repo: SpendRepository,
+        private val context: Context,
+    ) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T =
+            ExportsViewModel(repo, context) as T
     }
 }
 
