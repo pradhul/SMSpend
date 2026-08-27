@@ -60,7 +60,6 @@ class SmsScanWorker(
                     ),
                 )
             }
-            app.repository.processPostScanAlerts(applicationContext)
             app.repository.refreshRecurringMerchants()
             SpendWidgetUpdater.update(applicationContext)
             DiagLog.i(

@@ -10,14 +10,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import app.smspend.MainActivity
 import app.smspend.R
-import app.smspend.util.paiseToCompactRupees
 
 object SmSpendNotifications {
     const val CHANNEL_SCAN = "scan"
-    const val CHANNEL_ALERTS = "alerts"
 
     private const val ID_SCAN = 1001
-    private const val ID_LARGE_DEBIT = 1002
+    /** Cleans up notifications/channels from versions that had large-debit alerts. */
+    private const val LEGACY_CHANNEL_ALERTS = "alerts"
+    private const val LEGACY_ID_LARGE_DEBIT = 1002
 
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -31,15 +31,8 @@ object SmSpendNotifications {
                 description = "Quiet updates when new spends are found"
             },
         )
-        manager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ALERTS,
-                "Spend alerts",
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ).apply {
-                description = "Large debit alerts"
-            },
-        )
+        manager.cancel(LEGACY_ID_LARGE_DEBIT)
+        manager.deleteNotificationChannel(LEGACY_CHANNEL_ALERTS)
     }
 
     fun notifyNewSpends(context: Context, count: Int) {
@@ -52,17 +45,6 @@ object SmSpendNotifications {
             .build()
         runCatching {
             NotificationManagerCompat.from(context).notify(ID_SCAN, notification)
-        }
-    }
-
-    fun notifyLargeDebit(context: Context, merchant: String, amountPaise: Long) {
-        ensureChannels(context)
-        val notification = baseBuilder(context, CHANNEL_ALERTS)
-            .setContentTitle("Large debit")
-            .setContentText("$merchant · ${amountPaise.paiseToCompactRupees()}")
-            .build()
-        runCatching {
-            NotificationManagerCompat.from(context).notify(ID_LARGE_DEBIT, notification)
         }
     }
 

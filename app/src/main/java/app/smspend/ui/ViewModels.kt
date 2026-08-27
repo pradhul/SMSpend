@@ -375,7 +375,6 @@ class HomeViewModel(
                         runCatching { repo.runAiCategorizationPass() }
                         runCatching { SpendWidgetUpdater.update(appContext) }
                     }
-                    runCatching { repo.processPostScanAlerts(appContext) }
                     runCatching { repo.refreshRecurringMerchants() }
                     runCatching { SpendWidgetUpdater.update(appContext) }
                     maybePromptMyBanks()
@@ -418,7 +417,6 @@ class HomeViewModel(
                         }
                     }
                     refreshSyncLabel()
-                    runCatching { repo.processPostScanAlerts(appContext) }
                     runCatching { repo.refreshRecurringMerchants() }
                     runCatching { SpendWidgetUpdater.update(appContext) }
                     if (result.duplicatePairs.isNotEmpty()) {
@@ -744,7 +742,6 @@ data class SettingsUiState(
     val message: String? = null,
     val messageIsError: Boolean = false,
     val monthlyBudgetPaise: Long? = null,
-    val largeDebitThresholdPaise: Long = UserPreferences.DEFAULT_LARGE_DEBIT_PAISE,
     val autoScanEnabled: Boolean = true,
     val biometricLockEnabled: Boolean = false,
     val selfNameAliases: String = "",
@@ -787,14 +784,12 @@ class SettingsViewModel(
         },
         combine(
             prefs.monthlyBudgetPaise,
-            prefs.largeDebitThresholdPaise,
             prefs.autoScanEnabled,
             prefs.biometricLockEnabled,
             prefs.selfNameAliases,
-        ) { budget, threshold, autoScan, biometric, aliases ->
+        ) { budget, autoScan, biometric, aliases ->
             SettingsUiState(
                 monthlyBudgetPaise = budget,
-                largeDebitThresholdPaise = threshold,
                 autoScanEnabled = autoScan,
                 biometricLockEnabled = biometric,
                 selfNameAliases = aliases,
@@ -818,7 +813,6 @@ class SettingsViewModel(
     ) { base, extras, banks ->
         base.copy(
             monthlyBudgetPaise = extras.monthlyBudgetPaise,
-            largeDebitThresholdPaise = extras.largeDebitThresholdPaise,
             autoScanEnabled = extras.autoScanEnabled,
             biometricLockEnabled = extras.biometricLockEnabled,
             selfNameAliases = extras.selfNameAliases,
@@ -874,15 +868,6 @@ class SettingsViewModel(
             messageIsError.value = false
             message.value = if (rupees == null || rupees <= 0) "Budget cleared" else "Budget saved"
             SpendWidgetUpdater.update(appContext)
-        }
-    }
-
-    fun setLargeDebitThresholdRupees(rupeesText: String) {
-        viewModelScope.launch {
-            val rupees = rupeesText.trim().toLongOrNull() ?: return@launch
-            prefs.setLargeDebitThresholdPaise(rupees * 100)
-            messageIsError.value = false
-            message.value = "Large-debit alert set to ₹$rupees"
         }
     }
 
@@ -963,7 +948,6 @@ class SettingsViewModel(
                         runCatching { repo.runAiCategorizationPass() }
                         runCatching { SpendWidgetUpdater.update(appContext) }
                     }
-                    runCatching { repo.processPostScanAlerts(appContext) }
                     runCatching { repo.refreshRecurringMerchants() }
                     runCatching { SpendWidgetUpdater.update(appContext) }
                 }
