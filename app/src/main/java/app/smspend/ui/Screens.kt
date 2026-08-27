@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -131,6 +132,7 @@ import app.smspend.data.MonthlySpendTrend
 import app.smspend.data.SmsDebitParser
 import app.smspend.data.SpendRepository
 import app.smspend.data.TransactionEntity
+import app.smspend.data.TrendsBullet
 import app.smspend.data.WrongParseResult
 import app.smspend.domain.CategoryBucket
 import app.smspend.domain.SpendCategory
@@ -143,6 +145,7 @@ import app.smspend.ui.theme.Mute
 import app.smspend.ui.theme.Ok
 import app.smspend.ui.theme.Paper
 import app.smspend.ui.theme.PaperRaised
+import app.smspend.ui.theme.Warn
 import app.smspend.util.DateRanges
 import app.smspend.util.DueLabels
 import app.smspend.util.MonthWindow
@@ -164,6 +167,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenTrends: () -> Unit,
+    onOpenExports: () -> Unit,
     onOpenCategory: (CategoryBucket, Long, Long, String) -> Unit,
     sharedTransitionScope: SharedTransitionScope,
     animatedContentScope: AnimatedContentScope,
@@ -233,6 +237,9 @@ fun HomeScreen(
                 }
                 IconButton(onClick = onOpenTrends) {
                     Icon(Icons.Default.ShowChart, contentDescription = "Trends", tint = Ink)
+                }
+                IconButton(onClick = onOpenExports) {
+                    Icon(Icons.Default.TableChart, contentDescription = "Report & export", tint = Ink)
                 }
                 IconButton(onClick = onOpenSettings) {
                     Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Ink)
@@ -3344,8 +3351,9 @@ fun TrendsScreen(
 ) {
     val monthly by viewModel.monthly.collectAsStateWithLifecycle()
     val iconNames by viewModel.iconNames.collectAsStateWithLifecycle()
-    val insight by viewModel.insight.collectAsStateWithLifecycle()
-    val insightLoading by viewModel.insightLoading.collectAsStateWithLifecycle()
+    val summary by viewModel.summary.collectAsStateWithLifecycle()
+    val summaryError by viewModel.summaryError.collectAsStateWithLifecycle()
+    val summaryLoading by viewModel.summaryLoading.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -3388,11 +3396,12 @@ fun TrendsScreen(
                         MonthlySpendChartCard(snap = snap)
                     }
                     item(key = "insight") {
-                        TrendsInsightCard(
+                        TrendsSummaryCard(
                             hasApiKey = hasApiKey,
-                            insight = insight,
-                            loading = insightLoading,
-                            onExplain = viewModel::explainTrends,
+                            bullets = summary,
+                            error = summaryError,
+                            loading = summaryLoading,
+                            onRefresh = viewModel::refreshSummary,
                         )
                     }
                     item(key = "top-hdr") {
@@ -3418,11 +3427,12 @@ fun TrendsScreen(
 }
 
 @Composable
-private fun TrendsInsightCard(
+private fun TrendsSummaryCard(
     hasApiKey: Boolean,
-    insight: String?,
+    bullets: List<TrendsBullet>?,
+    error: String?,
     loading: Boolean,
-    onExplain: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -3437,9 +3447,9 @@ private fun TrendsInsightCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("What changed", style = MaterialTheme.typography.labelMedium, color = Mute)
+            Text("What changed vs last month", style = MaterialTheme.typography.labelMedium, color = Mute)
             if (hasApiKey) {
-                TextButton(onClick = onExplain, enabled = !loading) {
+                TextButton(onClick = onRefresh, enabled = !loading) {
                     if (loading) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(14.dp),
@@ -3449,7 +3459,7 @@ private fun TrendsInsightCard(
                         Spacer(modifier = Modifier.width(8.dp))
                     }
                     Text(
-                        if (insight == null) "Ask Gemini" else "Refresh",
+                        if (bullets == null) "Ask Gemini" else "Refresh",
                         color = MintDeep,
                         style = MaterialTheme.typography.labelLarge,
                     )
@@ -3458,26 +3468,54 @@ private fun TrendsInsightCard(
         }
         when {
             !hasApiKey -> Text(
-                "Add a Gemini key in Settings to get a short read on MoM shifts and shops that dominate a category.",
+                "Add a Gemini key in Settings to get a bullet summary of what changed — what cost more, what cost less, and bills that look unpaid.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Mute,
             )
-            loading && insight == null -> Text(
-                "Looking at this month vs last…",
+            bullets != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                bullets.forEach { bullet -> TrendsSummaryBullet(bullet) }
+            }
+            loading -> Text(
+                "Comparing this month with last…",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Mute,
             )
-            insight != null -> Text(
-                insight,
+            error != null -> Text(
+                error,
                 style = MaterialTheme.typography.bodyMedium,
-                color = Ink,
+                color = Debit,
             )
             else -> Text(
-                "Tap Ask Gemini for things like “Food is up vs last month” or “Amazon is most of Shopping”.",
+                "Tap Ask Gemini for things like “You spent ₹2,500 extra on Alcohol this month” or “Electricity was ₹100 less”.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Mute,
             )
         }
+    }
+}
+
+@Composable
+private fun TrendsSummaryBullet(bullet: TrendsBullet) {
+    val (dotColor, textColor) = when (bullet.tone) {
+        TrendsBullet.TONE_MORE -> Debit to Ink
+        TrendsBullet.TONE_LESS -> Ok to Ink
+        TrendsBullet.TONE_WARNING -> Warn to Warn
+        else -> Mute to Ink
+    }
+    Row(verticalAlignment = Alignment.Top) {
+        Box(
+            modifier = Modifier
+                .padding(top = 7.dp)
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(dotColor),
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            bullet.text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = textColor,
+        )
     }
 }
 

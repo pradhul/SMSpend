@@ -126,7 +126,30 @@ data class TrendsInsightHint(
     val thisMonthPaise: Long,
     val lastMonthPaise: Long,
     val topMerchants: List<TrendsMerchantShare>,
+    val thisMonthTxnCount: Int = 0,
+    val lastMonthTxnCount: Int = 0,
 )
+
+/** One spend row of the month report on the Exports page. */
+data class SpendReportRow(
+    val txId: Long,
+    val occurredAt: Long,
+    val merchant: String,
+    val categoryLabel: String,
+    val tags: List<String>,
+    val amountPaise: Long,
+) {
+    /** "What is this spending about" — category plus the user's own tags. */
+    val aboutText: String
+        get() = if (tags.isEmpty()) categoryLabel else "$categoryLabel · ${tags.joinToString(", ")}"
+}
+
+data class MonthSpendReport(
+    val month: MonthWindow,
+    val rows: List<SpendReportRow>,
+) {
+    val totalPaise: Long get() = rows.sumOf { it.amountPaise }
+}
 
 data class TagNetOffset(
     val tag: String,
@@ -648,6 +671,8 @@ class SpendRepository(
                     thisMonthPaise = thisTxs.sumOf { it.amountPaise },
                     lastMonthPaise = lastTxs.sumOf { it.amountPaise },
                     topMerchants = topMerchants,
+                    thisMonthTxnCount = thisTxs.size,
+                    lastMonthTxnCount = lastTxs.size,
                 )
             }
             .sortedByDescending { it.thisMonthPaise }
@@ -655,15 +680,42 @@ class SpendRepository(
             .filter { it.thisMonthPaise > 0 || it.lastMonthPaise > 0 }
     }
 
-    suspend fun explainTrendsInsight(hints: List<TrendsInsightHint>): String {
+    suspend fun hasGeminiKey(): Boolean = prefs.geminiApiKey.first().isNotBlank()
+
+    /**
+     * Recurring merchants whose expected date has passed with no new payment recorded —
+     * candidates for the orange "looks unpaid" Trends warning.
+     */
+    suspend fun listOverdueRecurring(
+        nowMs: Long = System.currentTimeMillis(),
+    ): List<RecurringMerchantEntity> =
+        recurringDao.listDueBy(nowMs).filter {
+            it.displayName.isNotBlank() && !it.displayName.equals("unknown", ignoreCase = true)
+        }
+
+    /**
+     * Gemini bullet summary of what changed this month vs last (amounts, frequency,
+     * missed recurring payments). Throws with a user-facing message on failure.
+     */
+    suspend fun trendsSummaryBullets(): List<TrendsBullet> {
         val apiKey = prefs.geminiApiKey.first()
         if (apiKey.isBlank()) {
             throw IllegalStateException("Add a Gemini API key in Settings first")
         }
+        val hints = buildTrendsInsightHints()
         if (hints.isEmpty()) {
-            throw IllegalStateException("Not enough spend yet for an insight")
+            throw IllegalStateException("Not enough spend yet for a summary")
         }
-        return when (val result = gemini.explainTrends(
+        val overdue = listOverdueRecurring().map {
+            UpcomingSpendHint(
+                displayName = it.displayName,
+                medianPaise = it.medianPaise,
+                cadenceDays = it.cadenceDays,
+                lastOccurredAt = it.lastOccurredAt,
+                nextExpectedAt = it.nextExpectedAt,
+            )
+        }
+        val result = gemini.summarizeTrends(
             apiKey,
             hints.map {
                 TrendsExplainHint(
@@ -671,10 +723,61 @@ class SpendRepository(
                     thisMonthPaise = it.thisMonthPaise,
                     lastMonthPaise = it.lastMonthPaise,
                     topMerchants = it.topMerchants.map { m -> m.merchantRaw to m.amountPaise },
+                    thisMonthTxnCount = it.thisMonthTxnCount,
+                    lastMonthTxnCount = it.lastMonthTxnCount,
                 )
             },
-        )) {
-            is GeminiResult.Success -> result.text.trim()
+            overdue,
+        )
+        return when (result) {
+            is GeminiResult.Success ->
+                gemini.parseTrendsBullets(result.text).ifEmpty {
+                    throw IllegalStateException("Could not read the Gemini summary")
+                }
+            is GeminiResult.Failure -> throw IllegalStateException(result.message)
+        }
+    }
+
+    /** All recorded spendings of the current month, oldest first, for the Exports report. */
+    suspend fun monthSpendReport(): MonthSpendReport {
+        val month = DateRanges.monthWindow(0)
+        val rows = txDao.listInRange(month.startMs, month.endExclusiveMs)
+            .filter { it.isDebit() && it.countsTowardTotals() }
+            .filter { SpendCategory.countsAsSpend(normalizeCategoryKey(it.category)) }
+            .sortedBy { it.occurredAt }
+            .map { tx ->
+                SpendReportRow(
+                    txId = tx.id,
+                    occurredAt = tx.occurredAt,
+                    merchant = tx.merchantRaw.ifBlank { tx.merchantKey }.ifBlank { "Unknown" },
+                    categoryLabel = CategoryBucket.fromStored(normalizeCategoryKey(tx.category)).label,
+                    tags = tx.userTags(),
+                    amountPaise = tx.amountPaise,
+                )
+            }
+        return MonthSpendReport(month = month, rows = rows)
+    }
+
+    /**
+     * Gemini labels for notable spend dates in the report (holiday/festival/landmark).
+     * Returns day-start millis → short label; ordinary days are omitted.
+     */
+    suspend fun annotateReportDates(rows: List<SpendReportRow>): Map<Long, String> {
+        val apiKey = prefs.geminiApiKey.first()
+        if (apiKey.isBlank()) {
+            throw IllegalStateException("Add a Gemini API key in Settings first")
+        }
+        val dayStarts = rows.map { DateRanges.startOfTodayMs(it.occurredAt) }.distinct().sorted()
+        if (dayStarts.isEmpty()) {
+            throw IllegalStateException("No spends recorded this month yet")
+        }
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val isoByDay = dayStarts.associateWith { fmt.format(java.util.Date(it)) }
+        return when (val result = gemini.annotateSpendDates(apiKey, isoByDay.values.toList())) {
+            is GeminiResult.Success -> {
+                val labels = gemini.parseDateLabels(result.text, isoByDay.values.toSet())
+                isoByDay.mapNotNull { (day, iso) -> labels[iso]?.let { day to it } }.toMap()
+            }
             is GeminiResult.Failure -> throw IllegalStateException(result.message)
         }
     }

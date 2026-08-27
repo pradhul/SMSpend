@@ -21,6 +21,8 @@ val Line = Color(0xFFDCD4C4)
 val Mute = Color(0xFF6F7268)
 val Debit = Color(0xFFB54A3A)
 val Ok = Color(0xFF4F6B3A)
+/** Burnt orange — missed-bill / attention warnings */
+val Warn = Color(0xFFC07A1F)
 
 private val ColorScheme = lightColorScheme(
     primary = Ink,
