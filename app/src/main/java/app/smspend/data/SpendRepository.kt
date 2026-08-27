@@ -1,11 +1,9 @@
 package app.smspend.data
 
-import android.content.Context
 import app.smspend.domain.CategoryBucket
 import app.smspend.domain.PeriodAccounting
 import app.smspend.domain.RecurringDetector
 import app.smspend.domain.SpendCategory
-import app.smspend.notify.SmSpendNotifications
 import app.smspend.util.DateRanges
 import app.smspend.util.MonthWindow
 import kotlinx.coroutines.flow.Flow
@@ -854,20 +852,6 @@ class SpendRepository(
                 },
             )
         }
-    }
-
-    suspend fun processPostScanAlerts(context: Context) {
-        val threshold = prefs.largeDebitThresholdPaise.first()
-        val lastId = prefs.lastAlertedTxnId.first()
-        val newOnes = txDao.listAfterId(lastId)
-        var maxId = lastId
-        for (tx in newOnes.filter { it.isDebit() }) {
-            maxId = maxOf(maxId, tx.id)
-            if (tx.amountPaise >= threshold) {
-                SmSpendNotifications.notifyLargeDebit(context, tx.merchantRaw, tx.amountPaise)
-            }
-        }
-        if (maxId > lastId) prefs.setLastAlertedTxnId(maxId)
     }
 
     private fun normalizeCategoryKey(stored: String): String =

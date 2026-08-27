@@ -2837,16 +2837,10 @@ fun SettingsScreen(
             state.monthlyBudgetPaise?.let { (it / 100).toString() }.orEmpty(),
         )
     }
-    var draftThreshold by remember {
-        mutableStateOf((state.largeDebitThresholdPaise / 100).toString())
-    }
     var draftSelfNames by remember { mutableStateOf(state.selfNameAliases) }
     LaunchedEffect(state.apiKey) { draftKey = state.apiKey }
     LaunchedEffect(state.monthlyBudgetPaise) {
         draftBudget = state.monthlyBudgetPaise?.let { (it / 100).toString() }.orEmpty()
-    }
-    LaunchedEffect(state.largeDebitThresholdPaise) {
-        draftThreshold = (state.largeDebitThresholdPaise / 100).toString()
     }
     LaunchedEffect(state.selfNameAliases) { draftSelfNames = state.selfNameAliases }
     val needsStoragePermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
@@ -2937,8 +2931,8 @@ fun SettingsScreen(
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Alerts & auto-scan",
-            body = "Background SMS scan every ~30 minutes. Large-debit alerts use notifications.",
+            title = "Auto-scan",
+            body = "Background SMS scan every ~30 minutes.",
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2976,20 +2970,6 @@ fun SettingsScreen(
                         )
                     },
                 )
-            }
-            OutlinedTextField(
-                value = draftThreshold,
-                onValueChange = { draftThreshold = it.filter { ch -> ch.isDigit() } },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Large debit alert (₹)") },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Ink,
-                    unfocusedBorderColor = Line,
-                    focusedLabelColor = Mute,
-                ),
-            )
-            TextButton(onClick = { viewModel.setLargeDebitThresholdRupees(draftThreshold) }) {
-                Text("Save threshold", color = MintDeep)
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
