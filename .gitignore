@@ -11,6 +11,9 @@
 .cxx/
 *.apk
 *.aab
+/keystore.properties
+*.jks
+*.keystore
 .apk-serve/
 node_modules/
 *.tgz

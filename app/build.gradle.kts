@@ -1,9 +1,25 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
+
+/**
+ * Release signing credentials come from an untracked `keystore.properties` at the repo
+ * root, or from environment variables so CI never needs the file. When neither is
+ * present the release build stays unsigned instead of failing.
+ */
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun signingValue(propertyKey: String, envKey: String): String? =
+    (keystoreProperties.getProperty(propertyKey) ?: System.getenv(envKey))
+        ?.takeIf { it.isNotBlank() }
 
 android {
     namespace = "app.smspend"
@@ -13,18 +29,32 @@ android {
         applicationId = "app.smspend"
         minSdk = 26
         targetSdk = 36
-        versionCode = 105
-        versionName = "1.0.5"
+        versionCode = 110
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        val storeFilePath = signingValue("storeFile", "SMSPEND_KEYSTORE_FILE")
+        if (storeFilePath != null) {
+            create("release") {
+                storeFile = file(storeFilePath)
+                storePassword = signingValue("storePassword", "SMSPEND_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "SMSPEND_KEY_ALIAS")
+                keyPassword = signingValue("keyPassword", "SMSPEND_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
@@ -37,6 +67,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {
