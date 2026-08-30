@@ -111,6 +111,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -124,6 +125,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.smspend.BuildConfig
 import app.smspend.data.CategoryNoteEntity
 import app.smspend.data.CategoryMonthRank
 import app.smspend.data.CategorySpend
@@ -2824,6 +2826,44 @@ fun RetagSheet(
     }
 }
 
+private const val GEMINI_KEY_URL = "https://aistudio.google.com/app/apikey"
+
+/** How to get a free Gemini key — shown in Onboarding and Settings. */
+@Composable
+private fun GeminiKeyHelp() {
+    val uriHandler = LocalUriHandler.current
+    Column(modifier = Modifier.padding(top = 6.dp)) {
+        listOf(
+            "Open Google AI Studio and sign in with your Google account",
+            "Tap “Create API key” — the free tier is enough for personal use",
+            "Copy the key, paste it below and save",
+        ).forEachIndexed { index, step ->
+            Row(modifier = Modifier.padding(bottom = 2.dp)) {
+                Text(
+                    "${index + 1}.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    step,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                )
+            }
+        }
+        Text(
+            "aistudio.google.com/app/apikey",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MintDeep,
+            textDecoration = TextDecoration.Underline,
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .clickable { runCatching { uriHandler.openUri(GEMINI_KEY_URL) } },
+        )
+    }
+}
+
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
@@ -2880,8 +2920,10 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
             title = "Gemini API key",
-            body = "Used for unknown merchants and Recategorize with Gemini. Key stays on this phone.",
+            body = "Needed to categorize unknown merchants and to write the Trends summary. " +
+                "Your key is stored only on this phone and used only from this phone.",
         ) {
+            GeminiKeyHelp()
             OutlinedTextField(
                 value = draftKey,
                 onValueChange = { draftKey = it },
@@ -3150,6 +3192,38 @@ fun SettingsScreen(
             ) {
                 Text("Reset learning", color = Ink)
             }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        SettingsCard(
+            title = "Privacy & data",
+            body = "SMSpend has no account, no analytics and no server of its own.",
+        ) {
+            listOf(
+                "Your SMS are read on this phone and parsed into a local database. " +
+                    "The full inbox is never uploaded.",
+                "When a merchant can't be categorized locally, its name, amount, bank " +
+                    "sender ID and a short excerpt of that one message are sent to Google's " +
+                    "Gemini API using your key. Trends sends category totals and merchant names.",
+                "Category totals, budgets and your key never leave the phone otherwise. " +
+                    "Backups and phone-to-phone transfer are disabled.",
+                "Uninstalling the app deletes everything it stored.",
+            ).forEach { line ->
+                Row(modifier = Modifier.padding(top = 6.dp)) {
+                    Text("·", style = MaterialTheme.typography.bodyMedium, color = Mute)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Mute,
+                    )
+                }
+            }
+            Text(
+                "Version ${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.labelMedium,
+                color = Mute,
+                modifier = Modifier.padding(top = 10.dp),
+            )
         }
         AnimatedVisibility(
             visible = state.message != null,
@@ -3963,13 +4037,25 @@ fun OnboardingScreen(
             modifier = Modifier.padding(horizontal = 12.dp),
         )
         Spacer(modifier = Modifier.height(28.dp))
-        OnboardStep("1. Allow SMS", if (hasSmsPermission) "Permission granted" else "Read debit alerts only. Nothing is uploaded.") {
+        OnboardStep(
+            "1. Allow SMS",
+            if (hasSmsPermission) {
+                "Permission granted"
+            } else {
+                "Reads bank debit alerts only. Your messages are parsed on this phone."
+            },
+        ) {
             if (!hasSmsPermission) {
                 TextButton(onClick = onRequestSms) { Text("Grant SMS access", color = MintDeep) }
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
-        OnboardStep("2. Add Gemini key", "Smart categories for unknown merchants (optional now).") {
+        OnboardStep(
+            "2. Add Gemini key",
+            "Optional now. Needed for smart categories — merchant details from " +
+                "unrecognised alerts are sent to Google's Gemini with your own key.",
+        ) {
+            GeminiKeyHelp()
             OutlinedTextField(
                 value = apiKey,
                 onValueChange = { apiKey = it },
