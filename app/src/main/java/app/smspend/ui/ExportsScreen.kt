@@ -46,6 +46,7 @@ import app.smspend.ui.theme.Ink
 import app.smspend.ui.theme.Line
 import app.smspend.ui.theme.Mint
 import app.smspend.ui.theme.MintDeep
+import app.smspend.ui.theme.MintWash
 import app.smspend.ui.theme.Mute
 import app.smspend.ui.theme.Paper
 import app.smspend.ui.theme.PaperRaised
@@ -285,7 +286,7 @@ private fun ReportDayHeader(dayStartMs: Long, note: String?) {
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Mint.copy(alpha = 0.45f))
+                    .background(MintWash.copy(alpha = 0.45f))
                     .padding(horizontal = 8.dp, vertical = 2.dp),
             ) {
                 Text(

@@ -22,8 +22,13 @@ class UserPreferences(private val context: Context) {
     private val keySelfNameAliases = stringPreferencesKey("self_name_aliases")
     private val keyMyBankIds = stringPreferencesKey("my_bank_ids")
     private val keyMyBanksConfigured = booleanPreferencesKey("my_banks_configured")
+    private val keyThemeMode = stringPreferencesKey("theme_mode")
 
     val geminiApiKey: Flow<String> = context.dataStore.data.map { it[keyApi].orEmpty() }
+    /** "system" (default), "light", or "dark". See ui.theme.ThemeMode. */
+    val themeMode: Flow<String> = context.dataStore.data.map {
+        it[keyThemeMode] ?: "system"
+    }
     val onboarded: Flow<Boolean> = context.dataStore.data.map { it[keyOnboarded] == true }
     val monthlyBudgetPaise: Flow<Long?> = context.dataStore.data.map { prefs ->
         prefs[keyMonthlyBudget]?.takeIf { it > 0L }
@@ -92,4 +97,7 @@ class UserPreferences(private val context: Context) {
         context.dataStore.edit { it[keyMyBanksConfigured] = value }
     }
 
+    suspend fun setThemeMode(value: String) {
+        context.dataStore.edit { it[keyThemeMode] = value }
+    }
 }

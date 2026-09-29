@@ -21,6 +21,7 @@ import app.smspend.data.SpendReportExporter
 import app.smspend.data.TrendsBullet
 import app.smspend.domain.RecurringDetector
 import app.smspend.domain.SpendCategory
+import app.smspend.ui.theme.ThemeMode
 import app.smspend.util.DateRanges
 import app.smspend.util.MonthWindow
 import app.smspend.widget.SpendWidgetUpdater
@@ -782,6 +783,7 @@ data class SettingsUiState(
     val autoScanEnabled: Boolean = true,
     val biometricLockEnabled: Boolean = false,
     val selfNameAliases: String = "",
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val myBankIds: String = "",
     val showMyBanks: Boolean = false,
     val editingBankIds: Set<String> = emptySet(),
@@ -824,12 +826,14 @@ class SettingsViewModel(
             prefs.autoScanEnabled,
             prefs.biometricLockEnabled,
             prefs.selfNameAliases,
-        ) { budget, autoScan, biometric, aliases ->
+            prefs.themeMode,
+        ) { budget, autoScan, biometric, aliases, theme ->
             SettingsUiState(
                 monthlyBudgetPaise = budget,
                 autoScanEnabled = autoScan,
                 biometricLockEnabled = biometric,
                 selfNameAliases = aliases,
+                themeMode = ThemeMode.fromStored(theme),
             )
         },
         combine(
@@ -853,6 +857,7 @@ class SettingsViewModel(
             autoScanEnabled = extras.autoScanEnabled,
             biometricLockEnabled = extras.biometricLockEnabled,
             selfNameAliases = extras.selfNameAliases,
+            themeMode = extras.themeMode,
             myBankIds = banks.myBankIds,
             showMyBanks = banks.showMyBanks,
             editingBankIds = banks.editingBankIds,
@@ -922,6 +927,13 @@ class SettingsViewModel(
             prefs.setBiometricLockEnabled(enabled)
             messageIsError.value = false
             message.value = if (enabled) "App lock on" else "App lock off"
+        }
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        viewModelScope.launch {
+            prefs.setThemeMode(mode.storageKey)
+            runCatching { SpendWidgetUpdater.update(appContext) }
         }
     }
 
