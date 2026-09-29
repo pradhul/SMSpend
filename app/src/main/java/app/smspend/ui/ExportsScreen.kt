@@ -73,6 +73,8 @@ fun ExportsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
+    LaunchedEffect(Unit) { viewModel.onScreenVisible() }
+
     LaunchedEffect(state.message) {
         val msg = state.message ?: return@LaunchedEffect
         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()

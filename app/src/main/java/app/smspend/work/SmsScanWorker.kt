@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
-import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -83,21 +82,19 @@ class SmsScanWorker(
     }
 
     companion object {
-        const val UNIQUE_NAME = "smspend_sms_scan"
+        const val UNIQUE_NAME = "smspend_sms_scan_v2"
+        private const val LEGACY_UNIQUE_NAME = "smspend_sms_scan"
 
         fun schedule(context: Context, enabled: Boolean) {
             val wm = WorkManager.getInstance(context.applicationContext)
+            wm.cancelUniqueWork(LEGACY_UNIQUE_NAME)
             if (!enabled) {
                 wm.cancelUniqueWork(UNIQUE_NAME)
                 return
             }
-            val request = PeriodicWorkRequestBuilder<SmsScanWorker>(30, TimeUnit.MINUTES)
-                .setConstraints(
-                    Constraints.Builder()
-                        .setRequiresBatteryNotLow(true)
-                        .build(),
-                )
-                .build()
+            // No battery constraint: a low battery was silently skipping the only
+            // background read, so new bank SMS sat unread until the next full open.
+            val request = PeriodicWorkRequestBuilder<SmsScanWorker>(30, TimeUnit.MINUTES).build()
             wm.enqueueUniquePeriodicWork(
                 UNIQUE_NAME,
                 ExistingPeriodicWorkPolicy.KEEP,
@@ -107,15 +104,10 @@ class SmsScanWorker(
 
         fun reschedule(context: Context, enabled: Boolean) {
             val wm = WorkManager.getInstance(context.applicationContext)
+            wm.cancelUniqueWork(LEGACY_UNIQUE_NAME)
             wm.cancelUniqueWork(UNIQUE_NAME)
             if (enabled) {
-                val request = PeriodicWorkRequestBuilder<SmsScanWorker>(30, TimeUnit.MINUTES)
-                    .setConstraints(
-                        Constraints.Builder()
-                            .setRequiresBatteryNotLow(true)
-                            .build(),
-                    )
-                    .build()
+                val request = PeriodicWorkRequestBuilder<SmsScanWorker>(30, TimeUnit.MINUTES).build()
                 wm.enqueueUniquePeriodicWork(
                     UNIQUE_NAME,
                     ExistingPeriodicWorkPolicy.UPDATE,

@@ -121,6 +121,9 @@ interface TransactionDao {
     @Query("SELECT dedupKey FROM transactions WHERE dedupKey != ''")
     suspend fun listDedupKeys(): List<String>
 
+    @Query("SELECT * FROM transactions WHERE dedupKey = :dedupKey LIMIT 1")
+    suspend fun getByDedupKey(dedupKey: String): TransactionEntity?
+
     @Query("UPDATE transactions SET dedupKey = :dedupKey WHERE id = :id")
     suspend fun updateDedupKey(id: Long, dedupKey: String)
 

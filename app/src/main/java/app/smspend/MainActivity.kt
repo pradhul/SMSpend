@@ -31,11 +31,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import app.smspend.domain.CategoryBucket
@@ -82,6 +86,10 @@ class MainActivity : FragmentActivity() {
                     ActivityResultContracts.RequestPermission(),
                 ) { }
 
+                LaunchedEffect(hasSms) {
+                    if (hasSms) app.ensureSmsInboxWatch()
+                }
+
                 LaunchedEffect(onboarded) {
                     if (onboarded && Build.VERSION.SDK_INT >= 33) {
                         val granted = ContextCompat.checkSelfPermission(
@@ -123,7 +131,7 @@ private fun SmSpendNav(
     onRequestSms: () -> Unit,
 ) {
     val nav = rememberNavController()
-    val start = if (onboarded) "home" else "onboarding"
+    val start = if (onboarded) "main" else "onboarding"
     val fadeSpec = tween<Float>(100, easing = FastOutSlowInEasing)
     val slideSpec = tween<IntOffset>(100, easing = FastOutSlowInEasing)
     val appContext = LocalContext.current.applicationContext
@@ -155,39 +163,48 @@ private fun SmSpendNav(
                     onRequestSms = onRequestSms,
                     viewModel = vm,
                     onFinished = {
-                        nav.navigate("home") {
+                        nav.navigate("main") {
                             popUpTo("onboarding") { inclusive = true }
                         }
                     },
                 )
             }
-            composable("home") {
+            navigation(route = "main", startDestination = "home") {
+            composable("home") { entry ->
+                val owner = remember(entry) { nav.getBackStackEntry("main") }
                 val vm: HomeViewModel = viewModel(
+                    viewModelStoreOwner = owner,
                     factory = HomeViewModel.Factory(app.repository, app.prefs, appContext),
                 )
-                LaunchedEffect(hasSmsPermission) {
-                    if (hasSmsPermission) vm.refresh(forceFullRange = true)
+                val lifecycleOwner = LocalLifecycleOwner.current
+                LaunchedEffect(lifecycleOwner, hasSmsPermission) {
+                    if (!hasSmsPermission) return@LaunchedEffect
+                    lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                        vm.catchUpInbox()
+                    }
                 }
                 val apiKey by app.prefs.geminiApiKey.collectAsStateWithLifecycle(initialValue = "")
                 HomeScreen(
                     viewModel = vm,
                     repo = app.repository,
                     hasApiKey = apiKey.isNotBlank(),
-                    onOpenSettings = { nav.navigate("settings") },
-                    onOpenSearch = { nav.navigate("search") },
-                    onOpenTrends = { nav.navigate("trends") },
-                    onOpenExports = { nav.navigate("exports") },
+                    onOpenSettings = { nav.openTop("settings") },
+                    onOpenSearch = { nav.openTop("search") },
+                    onOpenTrends = { nav.openTop("trends") },
+                    onOpenExports = { nav.openTop("exports") },
                     onOpenCategory = { bucket, startMs, endMs, title ->
                         nav.navigate(
                             "category/${Uri.encode(bucket.key)}/$startMs/$endMs/${Uri.encode(title)}",
-                        )
+                        ) { launchSingleTop = true }
                     },
                     sharedTransitionScope = this@SharedTransitionLayout,
                     animatedContentScope = this,
                 )
             }
-            composable("trends") {
+            composable("trends") { entry ->
+                val owner = remember(entry) { nav.getBackStackEntry("main") }
                 val vm: TrendsViewModel = viewModel(
+                    viewModelStoreOwner = owner,
                     factory = TrendsViewModel.Factory(app.repository),
                 )
                 val apiKey by app.prefs.geminiApiKey.collectAsStateWithLifecycle(initialValue = "")
@@ -199,12 +216,14 @@ private fun SmSpendNav(
                         val month = DateRanges.monthWindow(0)
                         nav.navigate(
                             "category/${Uri.encode(bucket.key)}/${month.startMs}/${month.endExclusiveMs}/${Uri.encode(month.title())}",
-                        )
+                        ) { launchSingleTop = true }
                     },
                 )
             }
-            composable("exports") {
+            composable("exports") { entry ->
+                val owner = remember(entry) { nav.getBackStackEntry("main") }
                 val vm: ExportsViewModel = viewModel(
+                    viewModelStoreOwner = owner,
                     factory = ExportsViewModel.Factory(app.repository, appContext),
                 )
                 val apiKey by app.prefs.geminiApiKey.collectAsStateWithLifecycle(initialValue = "")
@@ -214,8 +233,10 @@ private fun SmSpendNav(
                     onBack = { nav.popBackStack() },
                 )
             }
-            composable("search") {
+            composable("search") { entry ->
+                val owner = remember(entry) { nav.getBackStackEntry("main") }
                 val vm: SearchViewModel = viewModel(
+                    viewModelStoreOwner = owner,
                     factory = SearchViewModel.Factory(app.repository),
                 )
                 val apiKey by app.prefs.geminiApiKey.collectAsStateWithLifecycle(initialValue = "")
@@ -255,12 +276,19 @@ private fun SmSpendNav(
                     animatedContentScope = this,
                 )
             }
-            composable("settings") {
+            composable("settings") { entry ->
+                val owner = remember(entry) { nav.getBackStackEntry("main") }
                 val vm: SettingsViewModel = viewModel(
+                    viewModelStoreOwner = owner,
                     factory = SettingsViewModel.Factory(app.repository, app.prefs, appContext),
                 )
                 SettingsScreen(viewModel = vm, onBack = { nav.popBackStack() })
             }
+            }
         }
     }
+}
+
+private fun NavHostController.openTop(route: String) {
+    navigate(route) { launchSingleTop = true }
 }

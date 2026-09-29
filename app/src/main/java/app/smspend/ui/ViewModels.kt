@@ -25,8 +25,11 @@ import app.smspend.util.DateRanges
 import app.smspend.util.MonthWindow
 import app.smspend.widget.SpendWidgetUpdater
 import app.smspend.work.SmsScanWorker
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -40,6 +43,9 @@ import kotlinx.coroutines.launch
 
 /** Pager within Months: index 0 = pick-a-month, 1..N = home months (oldest → this month). */
 const val HOME_PICKER_PAGE = 0
+
+/** Quiet inbox catch-up while moving between screens. Pull-to-refresh ignores this. */
+private const val QUIET_SCAN_MIN_GAP_MS = 20_000L
 
 enum class HomeSegment {
     TODAY,
@@ -105,6 +111,8 @@ class HomeViewModel(
     private val selectedBankIds = MutableStateFlow<Set<String>>(emptySet())
     private val upcomingExplain = MutableStateFlow<String?>(null)
     private val upcomingExplainLoading = MutableStateFlow(false)
+    private val scanGate = Mutex()
+    private var lastQuietScanAtMs = 0L
 
     private val categoriesByPageFlow = combine(warmCenterIndex, customMonth, segment) { center, custom, seg ->
         Triple(center, custom, seg)
@@ -345,30 +353,40 @@ class HomeViewModel(
         }
     }
 
-    fun refresh(forceFullRange: Boolean = false) {
-        viewModelScope.launch {
-            scanning.value = true
-            message.value = null
-            val state = uiState.value
-            val since = when {
-                forceFullRange -> months.first().startMs
-                state.segment == HomeSegment.MONTHS ->
-                    monthForPage(selectedPageIndex.value)?.startMs ?: months.last().startMs
-                else -> state.periodStartMs
+    /** Incremental inbox read when Home is shown or the app returns to the foreground. */
+    fun catchUpInbox() {
+        viewModelScope.launch { runScan(userInitiated = false) }
+    }
+
+    /** Pull-to-refresh. Shows the spinner and always reads, ignoring the quiet-scan gap. */
+    fun refresh() {
+        viewModelScope.launch { runScan(userInitiated = true) }
+    }
+
+    private suspend fun runScan(userInitiated: Boolean) {
+        scanGate.withLock {
+            val now = System.currentTimeMillis()
+            val hadSync = repo.lastSyncAt() > 0L
+            val lastScanAt = maxOf(lastQuietScanAtMs, if (hadSync) repo.lastSyncAt() else 0L)
+            if (!userInitiated && hadSync && now - lastScanAt < QUIET_SCAN_MIN_GAP_MS) {
+                return@withLock
             }
-            runCatching {
-                repo.scanInbox(
-                    forceFullMonth = forceFullRange,
-                    sinceOverrideMs = since,
-                )
+            val showSpinner = userInitiated || !hadSync
+            if (showSpinner) {
+                scanning.value = true
+                message.value = null
             }
-                .onSuccess { result ->
+            try {
+                val result = repo.scanInbox()
+                if (userInitiated || result.newTransactions > 0) {
                     message.value = if (result.newTransactions == 0) {
                         "Up to date · ${result.scannedSms} SMS checked"
                     } else {
                         "Added ${result.newTransactions} spends"
                     }
-                    refreshSyncLabel()
+                }
+                refreshSyncLabel()
+                if (userInitiated || result.newTransactions > 0 || !hadSync) {
                     // Fire-and-forget so the spinner isn't held on Gemini latency;
                     // rows update live via Room flows when categories land.
                     viewModelScope.launch {
@@ -379,8 +397,14 @@ class HomeViewModel(
                     runCatching { SpendWidgetUpdater.update(appContext) }
                     maybePromptMyBanks()
                 }
-                .onFailure { message.value = it.message ?: "Scan failed" }
-            scanning.value = false
+                lastQuietScanAtMs = System.currentTimeMillis()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                message.value = e.message ?: "Scan failed"
+            } finally {
+                if (showSpinner) scanning.value = false
+            }
         }
     }
 
@@ -402,13 +426,14 @@ class HomeViewModel(
 
     fun syncThisPeriod() {
         viewModelScope.launch {
-            scanning.value = true
-            message.value = null
-            val state = uiState.value
-            val start = if (state.periodStartMs > 0) state.periodStartMs else months.first().startMs
-            val end = if (state.periodEndMs > 0) state.periodEndMs else DateRanges.endExclusiveNow()
-            runCatching { repo.syncPeriod(start, end) }
-                .onSuccess { result ->
+            scanGate.withLock {
+                scanning.value = true
+                message.value = null
+                val state = uiState.value
+                val start = if (state.periodStartMs > 0) state.periodStartMs else months.first().startMs
+                val end = if (state.periodEndMs > 0) state.periodEndMs else DateRanges.endExclusiveNow()
+                try {
+                    val result = repo.syncPeriod(start, end)
                     message.value = buildString {
                         append("Synced · ${result.newTransactions} new")
                         if (result.recategorized > 0) append(" · ${result.recategorized} recategorized")
@@ -423,9 +448,15 @@ class HomeViewModel(
                         duplicateReview.value = DuplicateReviewState(result.duplicatePairs)
                     }
                     maybePromptMyBanks()
+                    lastQuietScanAtMs = System.currentTimeMillis()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    message.value = e.message ?: "Sync failed"
+                } finally {
+                    scanning.value = false
                 }
-                .onFailure { message.value = it.message ?: "Sync failed" }
-            scanning.value = false
+            }
         }
     }
 
@@ -547,9 +578,9 @@ class CategoryViewModel(
     private val monthStartMs: Long,
     private val monthEndMs: Long,
 ) : ViewModel() {
-    val transactions: StateFlow<List<TransactionEntity>> =
+    val transactions: StateFlow<List<TransactionEntity>?> =
         repo.observeCategoryTxns(categoryKey, monthStartMs, monthEndMs)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val iconName: StateFlow<String?> =
         repo.observeCategoryIconName(categoryKey)
@@ -622,14 +653,19 @@ class TrendsViewModel(
 
     val iconNames: StateFlow<Map<String, String>> = iconNamesFlow
 
-    init {
+    /**
+     * Reloads the chart without clearing it, so coming back to Trends doesn't
+     * flash "Loading…". Gemini bullets are requested once until the user asks again.
+     */
+    fun onScreenVisible() {
         viewModelScope.launch {
-            val snap = runCatching { repo.monthlySpendTrend() }.getOrNull()
+            val snap = runCatching { repo.monthlySpendTrend() }.getOrNull() ?: return@launch
             _monthly.value = snap
-            val keys = snap?.ranks?.map { it.bucket.key }.orEmpty()
+            val keys = snap.ranks.map { it.bucket.key }
             runCatching { repo.ensureIconsForCategories(keys) }
-            // Auto-load the "What changed" bullets once per screen open.
-            if (snap != null && snap.ranks.isNotEmpty() && runCatching { repo.hasGeminiKey() }.getOrDefault(false)) {
+            if (_summary.value == null && snap.ranks.isNotEmpty() &&
+                runCatching { repo.hasGeminiKey() }.getOrDefault(false)
+            ) {
                 loadSummary()
             }
         }
@@ -674,9 +710,10 @@ class ExportsViewModel(
     private val _state = MutableStateFlow(ExportsUiState())
     val state: StateFlow<ExportsUiState> = _state
 
-    init {
+    /** Reloads the report in place so a return visit doesn't flash "Loading…". */
+    fun onScreenVisible() {
         viewModelScope.launch {
-            val report = runCatching { repo.monthSpendReport() }.getOrNull()
+            val report = runCatching { repo.monthSpendReport() }.getOrNull() ?: return@launch
             _state.value = _state.value.copy(report = report)
         }
     }

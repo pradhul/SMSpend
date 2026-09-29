@@ -1,7 +1,14 @@
 package app.smspend
 
+import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.pm.PackageManager
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Telephony
+import androidx.core.content.ContextCompat
 import app.smspend.data.DiagLog
 import app.smspend.data.SmsDebitParser
 import app.smspend.data.SmsInboxReader
@@ -11,9 +18,12 @@ import app.smspend.data.UserPreferences
 import app.smspend.notify.SmSpendNotifications
 import app.smspend.widget.SpendWidgetUpdater
 import app.smspend.work.SmsScanWorker
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -24,6 +34,8 @@ class SmSpendApp : Application() {
         private set
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var inboxWatch: ContentObserver? = null
+    private var inboxCatchUp: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -36,6 +48,7 @@ class SmSpendApp : Application() {
             prefs = prefs,
         )
         SmSpendNotifications.ensureChannels(this)
+        ensureSmsInboxWatch()
         appScope.launch {
             val enabled = prefs.autoScanEnabled.first()
             SmsScanWorker.schedule(this@SmSpendApp, enabled)
@@ -48,6 +61,43 @@ class SmSpendApp : Application() {
                     }
             }
             runCatching { repository.refreshRecurringMerchants() }
+        }
+    }
+
+    /**
+     * While this process is alive, read new bank SMS as they arrive instead of
+     * waiting for the next periodic worker or a manual refresh.
+     */
+    fun ensureSmsInboxWatch() {
+        if (inboxWatch != null) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) return
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                scheduleInboxCatchUp()
+            }
+        }
+        contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, observer)
+        inboxWatch = observer
+    }
+
+    private fun scheduleInboxCatchUp() {
+        inboxCatchUp?.cancel()
+        inboxCatchUp = appScope.launch {
+            delay(1_500)
+            try {
+                val result = repository.scanInbox()
+                if (result.newTransactions > 0) {
+                    runCatching { repository.runAiCategorizationPass() }
+                    runCatching { repository.refreshRecurringMerchants() }
+                    runCatching { SpendWidgetUpdater.update(this@SmSpendApp) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                DiagLog.e("scan", "inbox_watch_fail", mapOf("message" to (e.message ?: "unknown")))
+            }
         }
     }
 }

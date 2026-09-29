@@ -447,4 +447,11 @@ class SmsDebitParserTest {
     fun legacyFoodDeliveryMaps() {
         assertEquals(SpendCategory.FOOD_DINING, SpendCategory.fromStored("FOOD_DELIVERY"))
     }
+
+    @Test
+    fun bankSmsReplacesMerchantDedupHolder() {
+        assertTrue(SmsDebitParser.incomingBankReplacesDedupHolder(incomingIsBank = true, holderIsBank = false))
+        assertFalse(SmsDebitParser.incomingBankReplacesDedupHolder(incomingIsBank = false, holderIsBank = false))
+        assertFalse(SmsDebitParser.incomingBankReplacesDedupHolder(incomingIsBank = true, holderIsBank = true))
+    }
 }
