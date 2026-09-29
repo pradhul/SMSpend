@@ -5,6 +5,7 @@ import app.smspend.domain.PeriodAccounting
 import app.smspend.domain.RecurringDetector
 import app.smspend.domain.SpendCategory
 import app.smspend.util.DateRanges
+import app.smspend.util.InboxScanWindow
 import app.smspend.util.MonthWindow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -207,6 +208,7 @@ class SpendRepository(
     private val decisionDao get() = db.duplicateDecisions()
     private val learnedDao get() = db.learnedTxDecisions()
     private val pairDao get() = db.selfTransferPairs()
+    private val scanMutex = Mutex()
 
     companion object {
         /** ± window to merge a UPI notification onto a bank SMS transaction. */
@@ -891,14 +893,22 @@ class SpendRepository(
     suspend fun scanInbox(
         forceFullMonth: Boolean = false,
         sinceOverrideMs: Long? = null,
+    ): ScanResult = scanMutex.withLock {
+        scanInboxLocked(forceFullMonth, sinceOverrideMs)
+    }
+
+    private suspend fun scanInboxLocked(
+        forceFullMonth: Boolean = false,
+        sinceOverrideMs: Long? = null,
     ): ScanResult {
         val meta = syncDao.get()
         val oldestHomeMonth = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1)
-        val since = when {
-            sinceOverrideMs != null -> sinceOverrideMs
-            forceFullMonth || meta == null || meta.lastSmsDateMs <= 0L -> oldestHomeMonth
-            else -> meta.lastSmsDateMs
-        }
+        val since = InboxScanWindow.sinceMs(
+            lastSmsDateMs = meta?.lastSmsDateMs ?: 0L,
+            oldestHomeMonthMs = oldestHomeMonth,
+            sinceOverrideMs = sinceOverrideMs,
+            forceFullMonth = forceFullMonth,
+        )
 
         val messages = smsReader.readSince(since)
         var inserted = 0
@@ -969,9 +979,26 @@ class SpendRepository(
                 continue
             }
             val key = SmsDebitParser.directionalDedupKey(sms.body, amountPaise, sms.dateMs, isCredit = false)
-            if (key in seenDedupKeys) continue
-
             val isBank = SmsDebitParser.isBankDebit(sms.body, sms.sender)
+            if (key in seenDedupKeys) {
+                val existing = txDao.getByDedupKey(key)
+                val holderIsBank = existing != null &&
+                    existing.isDebit() &&
+                    SmsDebitParser.isBankDebit(existing.bodySnippet, existing.sender)
+                if (existing != null &&
+                    SmsDebitParser.incomingBankReplacesDedupHolder(isBank, holderIsBank)
+                ) {
+                    // Merchant confirmation claimed this ref first. The bank SMS is the ledger.
+                    txDao.deleteById(existing.id)
+                    recent.removeAll { it.id == existing.id }
+                    seenDedupKeys.remove(key)
+                } else if (existing == null) {
+                    seenDedupKeys.remove(key)
+                } else {
+                    continue
+                }
+            }
+
             if (!isBank) {
                 // Merchant confirmation — skip when a bank debit already covers this amount.
                 val bankPoints = recent
@@ -1129,13 +1156,19 @@ class SpendRepository(
                 lastSyncAtMs = System.currentTimeMillis(),
             ),
         )
-        // Clean already-stored merchant confirmations / same-payee bank doubles.
-        purgeCrossSourceDuplicates()
-        // Reversal SMS may arrive after the withdrawal was already stored from a prior scan.
-        purgeAtmReversalsFromInbox(oldestHomeMonth)
-        repairHighConfidenceCategories()
-        applySelfRdCrossNotes()
-        applyCreditPairSelfTransfers(since)
+        // Reversals don't insert a row, so this has to run even when nothing was stored.
+        purgeAtmReversals(messages)
+        // Full-table repair is expensive. Skip it when this pass only re-read the
+        // overlap and stored nothing — those rows were already repaired.
+        val deepClean = forceFullMonth || sinceOverrideMs != null || inserted > 0 ||
+            meta == null || meta.lastSmsDateMs <= 0L
+        if (deepClean) {
+            // Clean already-stored merchant confirmations / same-payee bank doubles.
+            purgeCrossSourceDuplicates()
+            repairHighConfidenceCategories()
+            applySelfRdCrossNotes()
+            applyCreditPairSelfTransfers(since)
+        }
         DiagLog.i(
             "scan",
             "scan_end",
@@ -1563,6 +1596,10 @@ class SpendRepository(
      */
     private suspend fun purgeAtmReversalsFromInbox(sinceMs: Long): Int {
         val messages = runCatching { smsReader.readSince(sinceMs) }.getOrDefault(emptyList())
+        return purgeAtmReversals(messages)
+    }
+
+    private suspend fun purgeAtmReversals(messages: List<RawSms>): Int {
         val reversals = messages.mapNotNull { sms ->
             SmsDebitParser.parseAtmReversal(sms.body)?.let { it to sms.dateMs }
         }

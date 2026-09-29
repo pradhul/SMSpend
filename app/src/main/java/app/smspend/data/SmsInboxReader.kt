@@ -27,9 +27,11 @@ class SmsInboxReader(private val context: Context) {
         val args = arrayOf(minDateMs.toString())
         val sort = "${Telephony.Sms.DATE} ASC"
         val out = mutableListOf<RawSms>()
-        context.contentResolver.query(uri, projection, selection, args, sort)?.use { cursor ->
-            while (cursor.moveToNext()) {
-                out += cursor.toRawSms()
+        val cursor = context.contentResolver.query(uri, projection, selection, args, sort)
+            ?: throw IllegalStateException("Couldn't read the SMS inbox")
+        cursor.use {
+            while (it.moveToNext()) {
+                out += it.toRawSms()
             }
         }
         out

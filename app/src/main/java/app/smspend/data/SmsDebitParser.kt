@@ -219,6 +219,13 @@ object SmsDebitParser {
     private fun isMerchantAppSenderKey(key: String): Boolean =
         merchantAppSenderTokens.any { key.contains(it) }
 
+    /**
+     * A bank ledger SMS should replace a merchant-app confirmation that already
+     * claimed the same dedup key. The reverse must not drop the bank row.
+     */
+    fun incomingBankReplacesDedupHolder(incomingIsBank: Boolean, holderIsBank: Boolean): Boolean =
+        incomingIsBank && !holderIsBank
+
     /** True if any bank debit shares [amountPaise] within ±[windowMs] of [occurredAt]. */
     fun hasMatchingBankDebit(
         amountPaise: Long,

@@ -101,6 +101,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -175,7 +176,7 @@ fun HomeScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val months = state.months.ifEmpty { DateRanges.homeMonths() }
     val pageCount = viewModel.pageCount()
-    val initialPage = (pageCount - 1).coerceAtLeast(0)
+    val initialPage = state.selectedPageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
     val pagerState = rememberPagerState(
         initialPage = initialPage,
         pageCount = { pageCount },
@@ -194,6 +195,11 @@ fun HomeScreen(
     }
     LaunchedEffect(pagerState, state.segment) {
         if (state.segment != HomeSegment.MONTHS) return@LaunchedEffect
+        val target = viewModel.uiState.value.selectedPageIndex
+            .coerceIn(0, (viewModel.pageCount() - 1).coerceAtLeast(0))
+        if (pagerState.currentPage != target) {
+            pagerState.scrollToPage(target)
+        }
         snapshotFlow { pagerState.settledPage }
             .distinctUntilChanged()
             .collect { page -> viewModel.selectPage(page) }
@@ -297,7 +303,7 @@ fun HomeScreen(
                     notices = state.periodNotices,
                     onExplainUpcoming = viewModel::explainUpcomingSpends,
                     onSync = { viewModel.syncThisPeriod() },
-                    onRefresh = { viewModel.refresh(forceFullRange = false) },
+                    onRefresh = { viewModel.refresh() },
                     onOpenCategory = { bucket ->
                         onOpenCategory(bucket, state.periodStartMs, state.periodEndMs, state.monthTitle)
                     },
@@ -388,7 +394,7 @@ fun HomeScreen(
                                     notices = if (isSettled) state.periodNotices else emptyList(),
                                     onExplainUpcoming = viewModel::explainUpcomingSpends,
                                     onSync = { viewModel.syncThisPeriod() },
-                                    onRefresh = { viewModel.refresh(forceFullRange = false) },
+                                    onRefresh = { viewModel.refresh() },
                                     onOpenCategory = { bucket ->
                                         onOpenCategory(bucket, custom.startMs, custom.endExclusiveMs, custom.title())
                                     },
@@ -428,7 +434,7 @@ fun HomeScreen(
                                 notices = if (isSettled) state.periodNotices else emptyList(),
                                 onExplainUpcoming = viewModel::explainUpcomingSpends,
                                 onSync = { viewModel.syncThisPeriod() },
-                                onRefresh = { viewModel.refresh(forceFullRange = false) },
+                                onRefresh = { viewModel.refresh() },
                                 onOpenCategory = { bucket ->
                                     onOpenCategory(bucket, month.startMs, month.endExclusiveMs, month.title())
                                 },
@@ -1428,7 +1434,9 @@ fun CategoryScreen(
     sharedTransitionScope: SharedTransitionScope,
     animatedContentScope: AnimatedContentScope,
 ) {
-    val txns by viewModel.transactions.collectAsStateWithLifecycle()
+    val txnState by viewModel.transactions.collectAsStateWithLifecycle()
+    val txns = txnState.orEmpty()
+    val txnsReady = txnState != null
     val iconName by viewModel.iconName.collectAsStateWithLifecycle()
     val monthTotals by viewModel.monthTotals.collectAsStateWithLifecycle()
     val notes by viewModel.notes.collectAsStateWithLifecycle()
@@ -1505,11 +1513,15 @@ fun CategoryScreen(
                     )
                 }
                 Text(
-                    total.paiseToCompactRupees(),
+                    if (txnsReady) total.paiseToCompactRupees() else "…",
                     style = MaterialTheme.typography.headlineMedium,
                     color = if (isSavings || isCredits) Ok else Debit,
                 )
-                Text("${txns.size} payments", style = MaterialTheme.typography.bodyMedium, color = Mute)
+                Text(
+                    if (txnsReady) "${txns.size} payments" else "Loading…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mute,
+                )
                 nettingNotice?.let { notice ->
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(notice, style = MaterialTheme.typography.bodyMedium, color = MintDeep)
@@ -2188,14 +2200,31 @@ private fun DuplicateStatusSheet(
     val scope = rememberCoroutineScope()
     var peer by remember(transaction.id) { mutableStateOf<TransactionEntity?>(null) }
     var loaded by remember(transaction.id) { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     LaunchedEffect(transaction.id) {
         peer = repo.findDuplicatePeer(transaction.id)
         loaded = true
     }
-    if (!loaded) return
+    if (!loaded) {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = PaperRaised,
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 20.dp, vertical = 24.dp)
+                    .fillMaxWidth(),
+            ) {
+                Text("Possible duplicate", style = MaterialTheme.typography.titleLarge, color = Ink)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Checking the other copy…", style = MaterialTheme.typography.bodyMedium, color = Mute)
+            }
+        }
+        return
+    }
     val matched = peer
     if (matched == null) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
             onDismissRequest = onDismiss,
             sheetState = sheetState,
@@ -2461,8 +2490,10 @@ fun RetagSheet(
     onSaveTag: (tag: String) -> Unit = {},
     onAskGemini: (applyAll: Boolean) -> Unit,
 ) {
-    var selectedTab by remember { mutableStateOf(initialTab.coerceIn(0, 1)) }
-    var selected by remember {
+    var selectedTab by remember(transaction.id, initialTab) {
+        mutableStateOf(initialTab.coerceIn(0, 1))
+    }
+    var selected by remember(transaction.id) {
         mutableStateOf(
             if (SpendCategory.isCustomKey(transaction.category)) {
                 null
@@ -2471,12 +2502,12 @@ fun RetagSheet(
             },
         )
     }
-    var selectedCustomKey by remember {
+    var selectedCustomKey by remember(transaction.id) {
         mutableStateOf(
             if (SpendCategory.isCustomKey(transaction.category)) transaction.category else null,
         )
     }
-    var customText by remember {
+    var customText by remember(transaction.id) {
         mutableStateOf(
             if (SpendCategory.isCustomKey(transaction.category)) {
                 SpendCategory.displayLabel(transaction.category)
@@ -2488,8 +2519,8 @@ fun RetagSheet(
     // Credits never apply-to-similar: they often share a bank-label merchant, so
     // bulk retag would hit every credit into that bank (repository guards this too).
     var applyAll by remember(transaction.id) { mutableStateOf(!transaction.isCredit()) }
-    var busy by remember { mutableStateOf(false) }
-    var savePressed by remember { mutableStateOf(false) }
+    var busy by remember(transaction.id) { mutableStateOf(false) }
+    var savePressed by remember(transaction.id) { mutableStateOf(false) }
     val systemNote = hasSystemStatus(transaction)
     var draftTags by remember(transaction.id, transaction.note) {
         mutableStateOf(transaction.userTags())
@@ -2838,11 +2869,20 @@ fun SettingsScreen(
         )
     }
     var draftSelfNames by remember { mutableStateOf(state.selfNameAliases) }
-    LaunchedEffect(state.apiKey) { draftKey = state.apiKey }
-    LaunchedEffect(state.monthlyBudgetPaise) {
-        draftBudget = state.monthlyBudgetPaise?.let { (it / 100).toString() }.orEmpty()
+    var keyFocused by remember { mutableStateOf(false) }
+    var budgetFocused by remember { mutableStateOf(false) }
+    var namesFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(state.apiKey) {
+        if (!keyFocused) draftKey = state.apiKey
     }
-    LaunchedEffect(state.selfNameAliases) { draftSelfNames = state.selfNameAliases }
+    LaunchedEffect(state.monthlyBudgetPaise) {
+        if (!budgetFocused) {
+            draftBudget = state.monthlyBudgetPaise?.let { (it / 100).toString() }.orEmpty()
+        }
+    }
+    LaunchedEffect(state.selfNameAliases) {
+        if (!namesFocused) draftSelfNames = state.selfNameAliases
+    }
     val needsStoragePermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
     var pendingExport by remember { mutableStateOf<String?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(
@@ -2885,7 +2925,9 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = draftKey,
                 onValueChange = { draftKey = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { keyFocused = it.isFocused },
                 label = { Text("API key") },
                 visualTransformation = PasswordVisualTransformation(),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -2917,7 +2959,9 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = draftBudget,
                 onValueChange = { draftBudget = it.filter { ch -> ch.isDigit() } },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { budgetFocused = it.isFocused },
                 label = { Text("Rupees per month") },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Ink,
@@ -2932,7 +2976,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
             title = "Auto-scan",
-            body = "Background SMS scan every ~30 minutes.",
+            body = "Reads new bank SMS while the app is open, and about every 30 minutes in the background.",
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2980,7 +3024,9 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = draftSelfNames,
                 onValueChange = { draftSelfNames = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { namesFocused = it.isFocused },
                 label = { Text("Your name(s)") },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Ink,
@@ -3334,6 +3380,8 @@ fun TrendsScreen(
     val summary by viewModel.summary.collectAsStateWithLifecycle()
     val summaryError by viewModel.summaryError.collectAsStateWithLifecycle()
     val summaryLoading by viewModel.summaryLoading.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) { viewModel.onScreenVisible() }
 
     Column(
         modifier = Modifier

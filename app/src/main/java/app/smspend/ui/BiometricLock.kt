@@ -3,7 +3,10 @@ package app.smspend.ui
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -119,24 +122,25 @@ fun BiometricGate(
         else if (lastStopAt == 0L) unlocked = false
     }
 
-    if (!enabled || unlocked) {
+    Box(Modifier.fillMaxSize()) {
         content()
-    } else {
-        UnlockScreen(
-            onUnlockClick = {
-                val act = activity ?: return@UnlockScreen
+        if (enabled && !unlocked) {
+            UnlockScreen(
+                onUnlockClick = {
+                    val act = activity ?: return@UnlockScreen
+                    act.promptBiometric(
+                        title = "Unlock SMSpend",
+                        onSuccess = { unlocked = true },
+                    )
+                },
+            )
+            LaunchedEffect(Unit) {
+                val act = activity ?: return@LaunchedEffect
                 act.promptBiometric(
                     title = "Unlock SMSpend",
                     onSuccess = { unlocked = true },
                 )
-            },
-        )
-        LaunchedEffect(Unit) {
-            val act = activity ?: return@LaunchedEffect
-            act.promptBiometric(
-                title = "Unlock SMSpend",
-                onSuccess = { unlocked = true },
-            )
+            }
         }
     }
 }
@@ -147,6 +151,11 @@ private fun UnlockScreen(onUnlockClick: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(Paper)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+            )
             .padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
