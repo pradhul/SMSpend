@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- FragmentActivity / BiometricPrompt require an AppCompat (or MaterialComponents) theme. -->
-    <style name="Theme.SMSpend" parent="Theme.AppCompat.Light.NoActionBar">
+    <style name="Theme.SMSpend" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:statusBarColor">@color/paper</item>
         <item name="android:navigationBarColor">@color/paper</item>
         <item name="android:windowBackground">@color/paper</item>

@@ -26,10 +26,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.IntOffset
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -58,8 +61,10 @@ import app.smspend.ui.SettingsScreen
 import app.smspend.ui.SettingsViewModel
 import app.smspend.ui.TrendsScreen
 import app.smspend.ui.TrendsViewModel
+import app.smspend.ui.theme.LocalSmSpendColors
 import app.smspend.ui.theme.Paper
 import app.smspend.ui.theme.SmSpendTheme
+import app.smspend.ui.theme.ThemeMode
 import app.smspend.util.DateRanges
 
 class MainActivity : FragmentActivity() {
@@ -68,7 +73,17 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         val app = application.smSpend
         setContent {
-            SmSpendTheme {
+            val themeModeKey by app.prefs.themeMode.collectAsStateWithLifecycle(initialValue = null)
+            val themeMode = ThemeMode.fromStored(themeModeKey)
+            SmSpendTheme(mode = themeMode) {
+                val isDark = LocalSmSpendColors.current.isDark
+                val view = LocalView.current
+                SideEffect {
+                    // Status/nav bar icons must flip with the in-app choice, not just the system setting.
+                    val controller = WindowCompat.getInsetsController(window, view)
+                    controller.isAppearanceLightStatusBars = !isDark
+                    controller.isAppearanceLightNavigationBars = !isDark
+                }
                 val onboarded by app.prefs.onboarded.collectAsStateWithLifecycle(initialValue = false)
                 val biometricEnabled by app.prefs.biometricLockEnabled.collectAsStateWithLifecycle(
                     initialValue = false,

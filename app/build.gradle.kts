@@ -13,8 +13,8 @@ android {
         applicationId = "app.smspend"
         minSdk = 26
         targetSdk = 36
-        versionCode = 106
-        versionName = "1.0.6"
+        versionCode = 110
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
