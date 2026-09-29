@@ -140,8 +140,11 @@ import app.smspend.domain.SpendCategory
 import app.smspend.ui.theme.Debit
 import app.smspend.ui.theme.Ink
 import app.smspend.ui.theme.Line
+import app.smspend.ui.theme.LocalSmSpendColors
 import app.smspend.ui.theme.Mint
 import app.smspend.ui.theme.MintDeep
+import app.smspend.ui.theme.MintWash
+import app.smspend.ui.theme.ThemeMode
 import app.smspend.ui.theme.Mute
 import app.smspend.ui.theme.Ok
 import app.smspend.ui.theme.Paper
@@ -1304,7 +1307,9 @@ private fun CategorySpendDonut(
     categories: List<CategorySpend>,
     totalPaise: Long,
 ) {
-    val slices = remember(categories, totalPaise) {
+    val isDark = LocalSmSpendColors.current.isDark
+    val otherColor = Mute.copy(alpha = 0.55f)
+    val slices = remember(categories, totalPaise, isDark, otherColor) {
         if (totalPaise <= 0L) emptyList()
         else {
             val sorted = categories
@@ -1318,7 +1323,7 @@ private fun CategorySpendDonut(
                         DonutSlice(
                             label = cat.bucket.label,
                             paise = cat.totalPaise,
-                            color = CategoryColors.forKey(cat.bucket.key),
+                            color = CategoryColors.forKey(cat.bucket.key, isDark),
                         ),
                     )
                 }
@@ -1327,7 +1332,7 @@ private fun CategorySpendDonut(
                         DonutSlice(
                             label = "Other",
                             paise = otherPaise,
-                            color = Mute.copy(alpha = 0.55f),
+                            color = otherColor,
                         ),
                     )
                 }
@@ -1692,6 +1697,7 @@ private fun aiPendingSuffix(tx: TransactionEntity): String =
     if (tx.aiStatus == TransactionEntity.AI_PENDING) " · AI pending" else ""
 
 /** Status tags that render as a subcategory-style chip in the row itself. */
+@Composable
 private fun statusChipFor(tx: TransactionEntity): Pair<String, Color>? = when {
     tx.isAtmFailed() -> "Failed" to Debit
     tx.isCardBillPaymentNote() -> "Card payment" to Mute
@@ -2975,6 +2981,16 @@ fun SettingsScreen(
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
+            title = "Appearance",
+            body = "Light keeps the paper look. Dark uses a warm, low-glare palette for night use.",
+        ) {
+            ThemeModePicker(
+                selected = state.themeMode,
+                onSelect = viewModel::setThemeMode,
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        SettingsCard(
             title = "Auto-scan",
             body = "Reads new bank SMS while the app is open, and about every 30 minutes in the background.",
         ) {
@@ -3206,6 +3222,36 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(it, color = if (state.messageIsError) Debit else MintDeep)
             }
+        }
+    }
+}
+
+/** Segmented System / Light / Dark control, styled like the Home period tabs. */
+@Composable
+private fun ThemeModePicker(
+    selected: ThemeMode,
+    onSelect: (ThemeMode) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ThemeMode.entries.forEach { mode ->
+            val isSelected = mode == selected
+            Text(
+                mode.label,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (isSelected) Ink else Paper)
+                    .border(1.dp, if (isSelected) Ink else Line, RoundedCornerShape(12.dp))
+                    .clickable { onSelect(mode) }
+                    .padding(vertical = 10.dp),
+                color = if (isSelected) Mint else Mute,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
         }
     }
 }
@@ -3621,6 +3667,7 @@ private fun MonthlyStackedBars(snap: MonthlySpendTrend) {
     }
     val maxTotal = (monthTotals.maxOrNull() ?: 1L).coerceAtLeast(1L)
     val otherColor = Mute.copy(alpha = 0.55f)
+    val isDark = LocalSmSpendColors.current.isDark
 
     Column {
         Canvas(
@@ -3637,7 +3684,7 @@ private fun MonthlyStackedBars(snap: MonthlySpendTrend) {
                 val stack = buildList {
                     snap.topKeys.forEach { key ->
                         val v = snap.series[key]?.getOrElse(i) { 0L } ?: 0L
-                        if (v > 0) add(CategoryColors.forKey(key) to v)
+                        if (v > 0) add(CategoryColors.forKey(key, isDark) to v)
                     }
                     val other = snap.otherByMonth.getOrElse(i) { 0L }
                     if (other > 0) add(otherColor to other)
