@@ -26,7 +26,15 @@ object CreditSmsParser {
         """(?i)(?:rs\.?|inr|₹)\s*:?\s*([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)(?![0-9])""",
     )
     private val upiRefPattern = Pattern.compile(
-        """(?i)(?:upi\s*ref(?:\s*no)?|ref)\s*[:#]?\s*(\d{9,})""",
+        """(?i)(?:(?:upi\s*)?ref(?:\s*no\.?)?\s*[:#]?|\b(?:imps|upi)\s*:)\s*(\d{9,})""",
+    )
+
+    /** Canara-style ledger credit: "A/c XX755 Cr INR 3,000.00 on 23/09/26 from ARYA DEVI K; IMPS: …" */
+    private val accountCrPattern = Pattern.compile(
+        """(?i)\b(?:Acct|A/c)\s+[X*.\d]+\s+Cr\.?\s+(?:INR|Rs\.?|₹)\s*([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)(?![0-9])""",
+    )
+    private val accountCrPayerPattern = Pattern.compile(
+        """(?i)\bCr\.?\s+(?:INR|Rs\.?|₹)\s*[\d,.]+.*?\bfrom\s+([^;]{2,60}?)\s*;""",
     )
     private val creditHints = listOf(
         "credited", "received rs", "received inr", "has been credited",
@@ -42,6 +50,7 @@ object CreditSmsParser {
     }
 
     fun parseCredit(body: String, sender: String, occurredAt: Long): ParsedCredit? {
+        parseAccountCr(body, sender, occurredAt)?.let { return it }
         val lower = body.lowercase(Locale.US)
         if (creditHints.none { lower.contains(it) }) return null
         // Prefer not to treat clear debit SMS as credits.
@@ -60,6 +69,29 @@ object CreditSmsParser {
             upiRef = extractUpiRef(body),
             bankId = bank?.id,
             merchantRaw = merchantRaw.trim().take(80),
+            merchantKey = SmsDebitParser.normalizeMerchantKey(merchantRaw),
+            bodySnippet = body.take(180),
+            sender = sender,
+            occurredAt = occurredAt,
+        )
+    }
+
+    private fun parseAccountCr(body: String, sender: String, occurredAt: Long): ParsedCredit? {
+        val text = body.replace('\n', ' ').trim()
+        val m = accountCrPattern.matcher(text)
+        if (!m.find()) return null
+        val rupees = m.group(1)?.replace(",", "")?.toDoubleOrNull() ?: return null
+        val amount = Math.round(rupees * 100.0).takeIf { it > 0 } ?: return null
+        val bank = IndianBanks.matchSender(sender)
+        val payer = accountCrPayerPattern.matcher(text).let { pm ->
+            if (pm.find()) pm.group(1)?.trim()?.trimEnd('.', ',', ' ')?.trim() else null
+        }?.takeIf { it.length >= 2 }
+        val merchantRaw = payer ?: bank?.label ?: sender.ifBlank { "Credit" }
+        return ParsedCredit(
+            amountPaise = amount,
+            upiRef = extractUpiRef(text),
+            bankId = bank?.id,
+            merchantRaw = merchantRaw.take(80),
             merchantKey = SmsDebitParser.normalizeMerchantKey(merchantRaw),
             bodySnippet = body.take(180),
             sender = sender,

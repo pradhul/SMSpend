@@ -40,7 +40,11 @@ data class CrossSourcePoint(
 
 object SmsDebitParser {
     /** Bump when parsing logic changes so stored transactions get re-checked once. */
-    const val VERSION = 10
+    const val VERSION = 11
+
+    /** Inbox rescan start on a VERSION bump (Canara "Acct … Dr. INR" template began Jul 2026). */
+    const val BACKFILL_SINCE_YEAR = 2026
+    const val BACKFILL_SINCE_MONTH = 7
 
     /** ± window for bank-vs-merchant cross-source dedup (any merchant app + bank SMS). */
     const val CROSS_SOURCE_WINDOW_MS = 6L * 60 * 60 * 1000
@@ -183,6 +187,45 @@ object SmsDebitParser {
         Pattern.compile(
             """(?i)(?:UPI\s*Ref(?:\s*No)?|Ref(?:erence)?(?:\s*No)?|UTR|RRN|Txn\s*(?:ID|No))[.:#\s]*([A-Za-z0-9]{6,25})""",
         ),
+        // Canara: "UPI: 130598832435" / "IMPS: 626616662833"
+        Pattern.compile("""(?i)\b(?:UPI|IMPS)\s*:\s*(\d{9,})"""),
+    )
+
+    /**
+     * Canara-style ledger debit (2026+):
+     * "Acct XXXX0755 Dr. INR 65.00 on 02/10/26 to Dream Tool R; UPI: 130598832435; Bal INR …"
+     * Bare "Dr." elsewhere is not treated as a debit hint.
+     */
+    private val accountDrDebitPattern = Pattern.compile(
+        """(?i)\b(?:Acct|A/c)\s+[X*.\d]+\s+Dr\.?\s+(?:INR|Rs\.?|₹)\s*([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)(?![0-9])""",
+    )
+    private val accountDrPayeePattern = Pattern.compile(
+        """(?i)\bDr\.?\s+(?:INR|Rs\.?|₹)\s*[\d,.]+.*?\bto\s+([^;]{2,60}?)\s*;""",
+    )
+
+    /** SBI YONO: "debited Rs.5,000.00 for transfer to Aryabd Ac Xx0755 dt 01.10.26" */
+    private val transferToNamedAccountPattern = Pattern.compile(
+        """(?i)\btransfer to\s+([A-Za-z][A-Za-z .&'-]{1,40}?)\s+(?:A/?c|Acct)\b""",
+    )
+
+    /** Destination account digits on an outbound transfer ("to … Ac Xx0755", "a/c XXX755 credited"). */
+    private val destinationAccountPatterns = listOf(
+        Pattern.compile("""(?i)\bto\s+[A-Za-z .&'-]{0,40}?\b(?:A/?c|Acct)\s*(?:no\.?\s*)?[X*.]*(\d{3,6})\b"""),
+        Pattern.compile("""(?i)\b(?:A/?c|Acct)\s*(?:no\.?\s*)?[X*.]*(\d{3,6})\s+(?:is\s+)?credited\b"""),
+    )
+
+    /** Account digits that receive money in a credit SMS ("credited to A/c XXXX0755", "A/c XX755 Cr INR"). */
+    private val creditedAccountPatterns = listOf(
+        Pattern.compile("""(?i)\b(?:A/?c|Acct)\s*(?:no\.?\s*)?[X*.]*(\d{3,6})\s+Cr\.?\s"""),
+        Pattern.compile("""(?i)\bcredited\s+to\s+(?:your\s+)?(?:A/?c|Acct|account)\s*(?:no\.?\s*)?[X*.]*(\d{3,6})\b"""),
+        Pattern.compile("""(?i)\b(?:A/?c|Acct|account)\s*(?:no\.?\s*)?[X*.]*(\d{3,6})\s+(?:is\s+|has\s+been\s+)?credited\b"""),
+    )
+
+    /** Account digits debited in a ledger SMS ("Acct XXXX0755 Dr.", "a/c no. XXXX3296 is debited"). */
+    private val debitedAccountPatterns = listOf(
+        Pattern.compile("""(?i)\b(?:A/?c|Acct)\s*(?:no\.?\s*)?[X*.]*(\d{3,6})\s+Dr\.?\s"""),
+        Pattern.compile("""(?i)\b(?:A/?c|Acct|account)\s*(?:no\.?\s*)?[X*.]*(\d{3,6})\s+(?:is\s+|has\s+been\s+)?debited\b"""),
+        Pattern.compile("""(?i)\bdebited\s+(?:from|to)\s+(?:your\s+)?(?:A/?c|Acct|account)\s*(?:no\.?\s*)?[X*.]*(\d{3,6})\b"""),
     )
 
     /**
@@ -427,6 +470,7 @@ object SmsDebitParser {
         // Outbound NEFT confirmation ("credited to <payee>") — before debit/credit gates,
         // because the body has no debit keyword and "credited" would otherwise reject it.
         parseNeftCreditedToPayee(text)?.let { return it }
+        parseAccountDrDebit(text, sender)?.let { return it }
 
         val hasStrong = strongDebitHints.any { lower.contains(it) }
         val hasWeak = weakDebitHints.any { lower.contains(it) }
@@ -473,6 +517,56 @@ object SmsDebitParser {
 
     fun isNeftCreditedToPayee(body: String): Boolean =
         parseNeftCreditedToPayee(body) != null
+
+    /** "Acct XXXX0755 Dr. INR 65.00 on … to <payee>; UPI: …" — amount is the Dr figure, not Bal. */
+    fun parseAccountDrDebit(body: String, sender: String = ""): ParsedDebit? {
+        val text = body.replace('\n', ' ').trim()
+        val m = accountDrDebitPattern.matcher(text)
+        if (!m.find()) return null
+        val rupees = m.group(1)?.replace(",", "")?.toDoubleOrNull() ?: return null
+        val amountPaise = Math.round(rupees * 100.0)
+        if (amountPaise <= 0) return null
+        val payee = accountDrPayeePattern.matcher(text).let { pm ->
+            if (pm.find()) pm.group(1)?.trim()?.trimEnd('.', ',', ' ')?.trim() else null
+        }?.takeIf { it.length >= 2 && isAcceptableMerchant(it, text, 0) }
+        val merchantRaw = payee ?: sender.ifBlank { "Unknown" }
+        return ParsedDebit(
+            amountPaise = amountPaise,
+            merchantRaw = merchantRaw.take(80),
+            merchantKey = normalizeMerchantKey(merchantRaw),
+        )
+    }
+
+    /** Destination account digits of an outbound transfer debit, or null. */
+    fun extractDestinationAccount(body: String): String? =
+        firstGroup(destinationAccountPatterns, body)
+
+    /** Account digits credited by an inbound credit SMS, or null. */
+    fun extractCreditedAccount(body: String): String? =
+        firstGroup(creditedAccountPatterns, body)
+
+    /** Account digits debited by a ledger debit SMS, or null. */
+    fun extractDebitedAccount(body: String): String? =
+        firstGroup(debitedAccountPatterns, body)
+
+    /** Masked suffixes refer to the same account when the shorter is a suffix of the longer (≥3 digits). */
+    fun sameAccountSuffix(a: String, b: String): Boolean {
+        if (a.length < 3 || b.length < 3) return false
+        return if (a.length >= b.length) a.endsWith(b) else b.endsWith(a)
+    }
+
+    /** True when the stored merchant is just the DLT sender id fallback (no payee in the SMS). */
+    fun isSenderIdMerchant(merchantRaw: String, sender: String): Boolean =
+        sender.isNotBlank() && merchantRaw.trim().equals(sender.trim(), ignoreCase = true)
+
+    private fun firstGroup(patterns: List<Pattern>, body: String): String? {
+        val text = body.replace('\n', ' ')
+        for (p in patterns) {
+            val m = p.matcher(text)
+            if (m.find()) return m.group(1)
+        }
+        return null
+    }
 
     fun isOpaqueBankTransfer(body: String, merchantKey: String = ""): Boolean {
         if (opaqueBankTransferMerchant(body) != null) return true
@@ -658,6 +752,12 @@ object SmsDebitParser {
                 ?.trimEnd('.', ',', ';', ' ')
                 ?.trim()
             if (!handle.isNullOrBlank() && handle.contains('@')) return handle
+        }
+
+        val named = transferToNamedAccountPattern.matcher(text)
+        if (named.find()) {
+            val payee = named.group(1)?.trim()?.trimEnd('.', ',', ' ')?.trim()
+            if (!payee.isNullOrBlank() && isAcceptableMerchant(payee, text, named.start(1))) return payee
         }
 
         for (p in merchantPatterns) {

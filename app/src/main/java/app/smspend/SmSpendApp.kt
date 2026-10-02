@@ -26,6 +26,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
 class SmSpendApp : Application() {
     lateinit var prefs: UserPreferences
@@ -54,7 +55,13 @@ class SmSpendApp : Application() {
             SmsScanWorker.schedule(this@SmSpendApp, enabled)
             // Parser logic changed: re-check previously imported transactions once.
             if (prefs.parserVersion.first() < SmsDebitParser.VERSION) {
-                runCatching { repository.repairTransactions() }
+                runCatching {
+                    repository.repairTransactions()
+                    // Repair only re-reads stored rows; templates the old parser skipped need a rescan.
+                    if (hasSmsPermission()) {
+                        repository.scanInbox(forceFullMonth = true, sinceOverrideMs = backfillSinceMs())
+                    }
+                }
                     .onSuccess {
                         prefs.setParserVersion(SmsDebitParser.VERSION)
                         runCatching { SpendWidgetUpdater.update(this@SmSpendApp) }
@@ -68,11 +75,19 @@ class SmSpendApp : Application() {
      * While this process is alive, read new bank SMS as they arrive instead of
      * waiting for the next periodic worker or a manual refresh.
      */
+    private fun hasSmsPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun backfillSinceMs(): Long =
+        Calendar.getInstance().apply {
+            clear()
+            set(SmsDebitParser.BACKFILL_SINCE_YEAR, SmsDebitParser.BACKFILL_SINCE_MONTH - 1, 1)
+        }.timeInMillis
+
     fun ensureSmsInboxWatch() {
         if (inboxWatch != null) return
-        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) ==
-            PackageManager.PERMISSION_GRANTED
-        if (!granted) return
+        if (!hasSmsPermission()) return
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
                 scheduleInboxCatchUp()

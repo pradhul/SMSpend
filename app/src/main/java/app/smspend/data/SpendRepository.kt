@@ -995,6 +995,7 @@ class SpendRepository(
                 } else if (existing == null) {
                     seenDedupKeys.remove(key)
                 } else {
+                    if (isBank && holderIsBank) adoptNamedPayee(existing, parsed, sms.sender)
                     continue
                 }
             }
@@ -1186,6 +1187,18 @@ class SpendRepository(
             newTransactions = inserted,
             newDebitTransactions = newDebits,
         )
+    }
+
+    /**
+     * Two bank SMS for the same ref (SBI "a/c … credited" + YONO "transfer to Aryabd"):
+     * when the kept row only has the sender id as merchant, take the payee from the other.
+     */
+    private suspend fun adoptNamedPayee(existing: TransactionEntity, parsed: ParsedDebit, sender: String) {
+        if (!SmsDebitParser.isSenderIdMerchant(existing.merchantRaw, existing.sender)) return
+        if (SmsDebitParser.isSenderIdMerchant(parsed.merchantRaw, sender)) return
+        if (parsed.amountPaise != existing.amountPaise) return
+        if (existing.merchantKey in correctionDao.listMerchantKeys().toSet()) return
+        txDao.updateParsedFields(existing.id, existing.amountPaise, parsed.merchantRaw, parsed.merchantKey)
     }
 
     /**
@@ -1547,12 +1560,17 @@ class SpendRepository(
                 continue
             }
             val amount = amountFromRules(senderRules, body) ?: parsed.amountPaise
+            // Keep a payee adopted from a sibling bank SMS instead of reverting to the sender id.
+            val keepNamed = SmsDebitParser.isSenderIdMerchant(parsed.merchantRaw, sender) &&
+                !SmsDebitParser.isSenderIdMerchant(tx.merchantRaw, tx.sender)
+            val merchantRaw = if (keepNamed) tx.merchantRaw else parsed.merchantRaw
+            val merchantKey = if (keepNamed) tx.merchantKey else parsed.merchantKey
             if (amount != tx.amountPaise ||
-                parsed.merchantRaw != tx.merchantRaw ||
-                parsed.merchantKey != tx.merchantKey
+                merchantRaw != tx.merchantRaw ||
+                merchantKey != tx.merchantKey
             ) {
                 if (amount != tx.amountPaise) fixed++
-                txDao.updateParsedFields(tx.id, amount, parsed.merchantRaw, parsed.merchantKey)
+                txDao.updateParsedFields(tx.id, amount, merchantRaw, merchantKey)
             }
             val key = SmsDebitParser.directionalDedupKey(body, amount, tx.occurredAt, isCredit = false)
             if (tx.dedupKey != key) {
@@ -1703,10 +1721,19 @@ class SpendRepository(
     suspend fun applyCreditPairSelfTransfers(sinceMs: Long): Int {
         val bankIds = app.smspend.domain.IndianBanks.parseIdsCsv(prefs.myBankIds.first())
         if (bankIds.isEmpty()) return 0
-        val range = txDao.listInRange(sinceMs, DateRanges.endExclusiveNow())
         val blockedSelf = learnedDao
             .listKeys(LearnedTxDecisionEntity.TYPE_SELF_TRANSFER, LearnedTxDecisionEntity.NO)
             .toSet()
+        val paired = pairCreditsToDebits(sinceMs, bankIds, blockedSelf)
+        return paired + markOwnAccountTransfers(sinceMs, bankIds, blockedSelf)
+    }
+
+    private suspend fun pairCreditsToDebits(
+        sinceMs: Long,
+        bankIds: Set<String>,
+        blockedSelf: Set<String>,
+    ): Int {
+        val range = txDao.listInRange(sinceMs, DateRanges.endExclusiveNow())
         val creditTxs = range.filter {
             it.isCredit() &&
                 SpendCategory.isCredits(it.category) &&
@@ -1737,6 +1764,48 @@ class SpendRepository(
         val paired = pairSelfTransfersFromParsed(range, credits, bankIds, creditTxs, blockedSelf)
         val named = markSelfNameCredits(creditTxs, blockedSelf)
         return paired + named
+    }
+
+    /**
+     * Outbound transfer whose destination account (e.g. "a/c XXX755 credited") is one the user
+     * owns — seen as the credited or debited account on My-bank SMS — becomes Self transfer even
+     * when the receiving bank never sent a credit SMS. Learned NO, user tags, and retags win.
+     */
+    private suspend fun markOwnAccountTransfers(
+        sinceMs: Long,
+        bankIds: Set<String>,
+        blockedSelf: Set<String>,
+    ): Int {
+        val all = txDao.listAll()
+        val ownAccounts = all.mapNotNull { tx ->
+            val bank = app.smspend.domain.IndianBanks.matchSender(tx.sender)?.id
+            if (bank == null || bank !in bankIds) return@mapNotNull null
+            if (tx.isCredit()) {
+                SmsDebitParser.extractCreditedAccount(tx.bodySnippet)
+            } else {
+                SmsDebitParser.extractDebitedAccount(tx.bodySnippet)
+            }
+        }.toSet()
+        if (ownAccounts.isEmpty()) return 0
+        val correctedKeys = correctionDao.listMerchantKeys().toSet()
+        var tagged = 0
+        for (tx in all) {
+            if (tx.occurredAt < sinceMs) continue
+            if (!tx.isDebit()) continue
+            if (SpendCategory.isCustomKey(tx.category)) continue
+            val cat = SpendCategory.fromStored(tx.category)
+            if (cat != SpendCategory.TRANSFERS && cat != SpendCategory.OTHER) continue
+            if (tx.userTagOrNull() != null) continue
+            if (tx.merchantKey in correctedKeys) continue
+            if (LearnedTxDecisionEntity.sourceKeyFor(tx) in blockedSelf) continue
+            val dest = SmsDebitParser.extractDestinationAccount(tx.bodySnippet) ?: continue
+            val source = SmsDebitParser.extractDebitedAccount(tx.bodySnippet)
+            if (source != null && SmsDebitParser.sameAccountSuffix(source, dest)) continue
+            if (ownAccounts.none { SmsDebitParser.sameAccountSuffix(it, dest) }) continue
+            txDao.updateCategory(tx.id, SpendCategory.SELF_TRANSFER.name)
+            tagged++
+        }
+        return tagged
     }
 
     /**
@@ -1963,6 +2032,8 @@ class SpendRepository(
                 remember(merchantKey, merchantRaw, resolved.name)
                 continue
             }
+            // Own-account pairing already proved this generic IMPS/NEFT is a self transfer.
+            if (resolved == SpendCategory.TRANSFERS && stored == SpendCategory.SELF_TRANSFER.name) continue
             if (retaggedMerchants.add(merchantKey)) {
                 retag(tx.id, resolved.name, applyToSimilar = true, logCorrection = false)
             } else {
