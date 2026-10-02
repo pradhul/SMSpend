@@ -30,6 +30,31 @@ data class GeminiReparse(
     val ignoreRegex: String?,
 )
 
+/** One SMS the built-in parsers rejected, sent to Gemini for triage. */
+data class SmsForTriage(
+    val id: Long,
+    val sender: String,
+    val body: String,
+)
+
+/** Gemini's reading of one triaged SMS. */
+data class SmsTriageVerdict(
+    val id: Long,
+    /** [KIND_DEBIT], [KIND_CREDIT], or [KIND_NOT_TXN]. */
+    val kind: String,
+    val amountPaise: Long?,
+    val payee: String?,
+    val accountSuffix: String?,
+    val ref: String?,
+    val templateRegex: String?,
+) {
+    companion object {
+        const val KIND_DEBIT = "DEBIT"
+        const val KIND_CREDIT = "CREDIT"
+        const val KIND_NOT_TXN = "NOT_TXN"
+    }
+}
+
 data class MerchantForCategorize(
     val merchantKey: String,
     val merchantRaw: String,
@@ -151,6 +176,38 @@ class GeminiCategorizer(
                             .put("category", JSONObject().put("type", "STRING")),
                     )
                     .put("required", JSONArray().put("id").put("category")),
+            )
+
+        /** Structured-output schema for SMS triage: [{"id", "kind", "amount_rupees", …}, …]. */
+        private val SMS_TRIAGE_SCHEMA: JSONObject = JSONObject()
+            .put("type", "ARRAY")
+            .put(
+                "items",
+                JSONObject()
+                    .put("type", "OBJECT")
+                    .put(
+                        "properties",
+                        JSONObject()
+                            .put("id", JSONObject().put("type", "INTEGER"))
+                            .put(
+                                "kind",
+                                JSONObject()
+                                    .put("type", "STRING")
+                                    .put(
+                                        "enum",
+                                        JSONArray()
+                                            .put(SmsTriageVerdict.KIND_DEBIT)
+                                            .put(SmsTriageVerdict.KIND_CREDIT)
+                                            .put(SmsTriageVerdict.KIND_NOT_TXN),
+                                    ),
+                            )
+                            .put("amount_rupees", JSONObject().put("type", "NUMBER").put("nullable", true))
+                            .put("payee", JSONObject().put("type", "STRING").put("nullable", true))
+                            .put("account_suffix", JSONObject().put("type", "STRING").put("nullable", true))
+                            .put("ref", JSONObject().put("type", "STRING").put("nullable", true))
+                            .put("template_regex", JSONObject().put("type", "STRING").put("nullable", true)),
+                    )
+                    .put("required", JSONArray().put("id").put("kind")),
             )
 
         /** Structured-output schema: [{"text": "…", "tone": "more|less|warning|info"}, …]. */
@@ -362,6 +419,59 @@ class GeminiCategorizer(
         when (val result = generateContent(apiKey, prompt, jsonMode = true)) {
             is GeminiResult.Success -> parseReparse(result.text)
             is GeminiResult.Failure -> null
+        }
+    }
+
+    /**
+     * Classify SMS the built-in parsers rejected: completed debit, inbound credit, or not a
+     * transaction. Also asks for a reusable per-format regex so the app can parse the next
+     * message from that sender locally. Returns verdicts by id (unknown ids dropped) and the model.
+     */
+    suspend fun triageSms(
+        apiKey: String,
+        items: List<SmsForTriage>,
+    ): Triple<List<SmsTriageVerdict>, String?, GeminiResult.Failure?> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank() || items.isEmpty()) {
+            return@withContext Triple(emptyList(), null, null)
+        }
+        val batch = items.take(AiSmsTriage.BATCH_SIZE)
+        val lines = batch.joinToString("\n") { item ->
+            val body = item.body.replace('\n', ' ').take(AiSmsTriage.MAX_BODY_CHARS)
+            JSONObject().put("id", item.id).put("sender", item.sender).put("sms", body).toString()
+        }
+        val prompt = """
+            You read Indian bank, card, UPI, and wallet SMS for a personal expense tracker.
+            A rule-based parser could not read the messages below. Classify each one.
+
+            For every input id return one object:
+            - "kind": "DEBIT" only if the SMS confirms money has ALREADY left the user's account or card
+              (UPI payment, card spend, IMPS/NEFT sent, ATM withdrawal, auto-debit done).
+              "CREDIT" only if money has ALREADY arrived in the user's account (salary, refund, transfer in, interest).
+              "NOT_TXN" for everything else: OTPs, offers, loan or card promotions, balance or limit updates,
+              upcoming or scheduled debits, mandate setup, bill or due reminders, payment requests, failed or declined payments.
+            - "amount_rupees": the transaction amount (never the balance, limit, or due amount), or null.
+            - "payee": short merchant or person the money went to (DEBIT) or came from (CREDIT), or null.
+            - "account_suffix": the user's account or card digits shown (e.g. "0755"), or null.
+            - "ref": UPI/IMPS/NEFT reference number, or null.
+            - "template_regex": for DEBIT or CREDIT only, a Java regex that matches this message FORMAT from this
+              sender (not just this one message). It must use a named group (?<amount>...) for the amount digits
+              (commas allowed) and may use (?<payee>...) for the payee. Keep the bank's fixed wording literal
+              (e.g. "Dr\. INR "), use [\d,.]+ for numbers and lazy groups for variable text. Otherwise null.
+
+            Messages (one JSON per line):
+            $lines
+        """.trimIndent()
+        when (
+            val result = generateContent(
+                apiKey,
+                prompt,
+                jsonMode = true,
+                responseSchema = SMS_TRIAGE_SCHEMA,
+            )
+        ) {
+            is GeminiResult.Success ->
+                Triple(parseTriageVerdicts(result.text, batch.map { it.id }.toSet()), result.model, null)
+            is GeminiResult.Failure -> Triple(emptyList(), null, result)
         }
     }
 
@@ -928,6 +1038,39 @@ class GeminiCategorizer(
             val label = obj.optString("label").trim()
             if (date !in expectedDates || label.isEmpty()) continue
             out[date] = label
+        }
+        return out
+    }
+
+    /** Parses the triage array; drops unknown ids and unknown kinds, treats bad amounts as null. */
+    fun parseTriageVerdicts(raw: String, expectedIds: Set<Long>): List<SmsTriageVerdict> {
+        val arr = parseJsonArray(raw) ?: return emptyList()
+        val out = mutableListOf<SmsTriageVerdict>()
+        val seen = mutableSetOf<Long>()
+        fun str(obj: JSONObject, key: String): String? =
+            if (obj.isNull(key)) null else obj.optString(key).trim().takeIf { it.isNotEmpty() && it != "null" }
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val id = obj.optLong("id", Long.MIN_VALUE)
+            if (id !in expectedIds || !seen.add(id)) continue
+            val kind = obj.optString("kind").trim().uppercase()
+            if (kind !in setOf(
+                    SmsTriageVerdict.KIND_DEBIT,
+                    SmsTriageVerdict.KIND_CREDIT,
+                    SmsTriageVerdict.KIND_NOT_TXN,
+                )
+            ) continue
+            val rupees = if (obj.isNull("amount_rupees")) null else obj.optDouble("amount_rupees", Double.NaN)
+            val paise = rupees?.takeIf { !it.isNaN() && it > 0 }?.let { Math.round(it * 100.0) }
+            out += SmsTriageVerdict(
+                id = id,
+                kind = kind,
+                amountPaise = paise,
+                payee = str(obj, "payee"),
+                accountSuffix = str(obj, "account_suffix"),
+                ref = str(obj, "ref"),
+                templateRegex = str(obj, "template_regex"),
+            )
         }
         return out
     }

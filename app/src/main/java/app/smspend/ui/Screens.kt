@@ -1787,6 +1787,9 @@ private fun TransactionRowContent(
                         onClick = if (tx.isPossibleDuplicateNote()) onDuplicateChip else null,
                     )
                 }
+                if (tx.isAiFound()) {
+                    StatusChip(label = "AI", tint = MintDeep)
+                }
                 cardSpendChipLabel(tx)?.let { label ->
                     StatusChip(label = label, tint = MintDeep)
                 }
@@ -1869,6 +1872,7 @@ fun TransactionDetailSheet(
     var showMarkDuplicate by remember { mutableStateOf(false) }
     var confirmDuplicatePeer by remember { mutableStateOf<TransactionEntity?>(null) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val credit = transaction.isCredit()
 
@@ -1916,6 +1920,9 @@ fun TransactionDetailSheet(
             ) {
                 statusChipFor(transaction)?.let { chip ->
                     StatusChip(label = chip.first, tint = chip.second)
+                }
+                if (transaction.isAiFound()) {
+                    StatusChip(label = "AI", tint = MintDeep)
                 }
                 Text(
                     "${SpendCategory.displayLabel(transaction.category)} · " +
@@ -2125,6 +2132,42 @@ fun TransactionDetailSheet(
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Text("Change category")
+            }
+            if (transaction.isLearnedParse()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    if (transaction.isAiFound()) {
+                        "Gemini found this in an SMS the built-in rules didn't recognise."
+                    } else {
+                        "Read with a format SMSpend learned from an earlier AI find."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Mute,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            val removedTemplates = repo.markNotTransaction(transaction.id)
+                            Toast.makeText(
+                                context,
+                                when {
+                                    removedTemplates == null -> "Already removed"
+                                    removedTemplates > 0 -> "Removed · learned format forgotten"
+                                    else -> "Removed · won't be counted again"
+                                },
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            onDismiss()
+                        }
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("Not a transaction", color = Debit)
+                }
             }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedButton(
@@ -3003,6 +3046,24 @@ fun SettingsScreen(
                 Switch(
                     checked = state.autoScanEnabled,
                     onCheckedChange = { viewModel.setAutoScanEnabled(it) },
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Use AI to catch missed bank SMS", color = Ink)
+                    Text(
+                        if (state.apiKey.isBlank()) "Needs a Gemini API key" else "Found spends get an AI badge you can undo",
+                        color = Mute,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = state.aiTriageEnabled,
+                    onCheckedChange = { viewModel.setAiTriageEnabled(it) },
                 )
             }
             Row(

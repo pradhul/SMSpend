@@ -42,6 +42,18 @@ data class AiPassResult(
     val error: String? = null,
 )
 
+data class AiTriageResult(
+    /** Rejected SMS that passed the local candidate filter and had no cached verdict. */
+    val candidates: Int,
+    /** Candidates sent to Gemini this pass. */
+    val sent: Int,
+    /** Transactions inserted from AI verdicts. */
+    val inserted: Int,
+    /** New per-sender templates saved. */
+    val templatesLearned: Int,
+    val error: String? = null,
+)
+
 data class DuplicateFlagResult(
     val flagged: Int,
     val candidates: Int,
@@ -208,7 +220,9 @@ class SpendRepository(
     private val decisionDao get() = db.duplicateDecisions()
     private val learnedDao get() = db.learnedTxDecisions()
     private val pairDao get() = db.selfTransferPairs()
+    private val verdictDao get() = db.aiSmsVerdicts()
     private val scanMutex = Mutex()
+    private val triageMutex = Mutex()
 
     companion object {
         /** ± window to merge a UPI notification onto a bank SMS transaction. */
@@ -918,14 +932,7 @@ class SpendRepository(
         var merchantConfirmSkipped = 0
         var maxDate = meta?.lastSmsDateMs ?: 0L
         val rulesBySender = ruleDao.listAll().groupBy { it.senderKey }
-        val seenDedupKeys = txDao.listDedupKeys().toMutableSet()
-
-        val windowMs = SmsDebitParser.CROSS_SOURCE_WINDOW_MS
-        val lookbackFrom = since - windowMs
-        val lookbackTo = System.currentTimeMillis() + windowMs
-        // Bank-is-truth working set: classify from body+sender (no schema flag).
-        val recent = txDao.listInRange(lookbackFrom, lookbackTo).toMutableList()
-        val batchBankDebits = mutableListOf<Pair<Long, Long>>() // amountPaise to occurredAt
+        val state = newInsertState(since)
 
         DiagLog.i(
             "scan",
@@ -958,7 +965,7 @@ class SpendRepository(
                 parseSkipped++
                 val atmRev = SmsDebitParser.parseAtmReversal(sms.body)
                 if (atmRev != null) {
-                    applyAtmReversal(atmRev, sms.dateMs, recent)
+                    applyAtmReversal(atmRev, sms.dateMs, state.recent)
                     DiagLog.i(
                         "scan",
                         "parse_skip",
@@ -968,126 +975,31 @@ class SpendRepository(
                             "amountPaise" to atmRev.amountPaise,
                         ),
                     )
+                    continue
+                }
+                if (CreditSmsParser.parseCredit(sms.body, sms.sender, sms.dateMs) == null) {
+                    val learned = templateDebit(senderRules, sms)
+                    if (learned != null) {
+                        when (insertParsedDebit(state, sms, learned, learned.amountPaise, TransactionEntity.SOURCE_TEMPLATE)) {
+                            DebitInsertOutcome.INSERTED -> {
+                                inserted++
+                                newDebits++
+                            }
+                            DebitInsertOutcome.MERCHANT_COVERED -> merchantConfirmSkipped++
+                            DebitInsertOutcome.SKIPPED -> Unit
+                        }
+                    }
                 }
                 continue
             }
             val amountPaise = amountFromRules(senderRules, sms.body) ?: parsed.amountPaise
-            val sourceKey = TransactionEntity.sourceKeyForSms(sms.id)
-            if (learnedDao.get(sourceKey, LearnedTxDecisionEntity.TYPE_REMOVED_DUPLICATE)?.decision ==
-                LearnedTxDecisionEntity.YES
-            ) {
-                continue
-            }
-            val key = SmsDebitParser.directionalDedupKey(sms.body, amountPaise, sms.dateMs, isCredit = false)
-            val isBank = SmsDebitParser.isBankDebit(sms.body, sms.sender)
-            if (key in seenDedupKeys) {
-                val existing = txDao.getByDedupKey(key)
-                val holderIsBank = existing != null &&
-                    existing.isDebit() &&
-                    SmsDebitParser.isBankDebit(existing.bodySnippet, existing.sender)
-                if (existing != null &&
-                    SmsDebitParser.incomingBankReplacesDedupHolder(isBank, holderIsBank)
-                ) {
-                    // Merchant confirmation claimed this ref first. The bank SMS is the ledger.
-                    txDao.deleteById(existing.id)
-                    recent.removeAll { it.id == existing.id }
-                    seenDedupKeys.remove(key)
-                } else if (existing == null) {
-                    seenDedupKeys.remove(key)
-                } else {
-                    if (isBank && holderIsBank) adoptNamedPayee(existing, parsed, sms.sender)
-                    continue
+            when (insertParsedDebit(state, sms, parsed, amountPaise, TransactionEntity.SOURCE_RULE)) {
+                DebitInsertOutcome.INSERTED -> {
+                    inserted++
+                    newDebits++
                 }
-            }
-
-            if (!isBank) {
-                // Merchant confirmation — skip when a bank debit already covers this amount.
-                val bankPoints = recent
-                    .filter { SmsDebitParser.isBankDebit(it.bodySnippet, it.sender) }
-                    .map { it.amountPaise to it.occurredAt } + batchBankDebits
-                if (SmsDebitParser.hasMatchingBankDebit(amountPaise, sms.dateMs, bankPoints, windowMs)) {
-                    merchantConfirmSkipped++
-                    DiagLog.i(
-                        "scan",
-                        "parse_skip",
-                        mapOf(
-                            "reason" to "merchant_confirm_covered",
-                            "sender" to sms.sender,
-                            "amountPaise" to amountPaise,
-                            "merchantKey" to parsed.merchantKey,
-                        ),
-                    )
-                    continue
-                }
-            } else {
-                // Bank wins: drop merchant-confirmation rows with the same amount in-window.
-                val merchants = recent.filter { tx ->
-                    tx.isDebit() &&
-                        !SmsDebitParser.isBankDebit(tx.bodySnippet, tx.sender) &&
-                        tx.amountPaise == amountPaise &&
-                        abs(tx.occurredAt - sms.dateMs) <= windowMs
-                }
-                for (m in merchants) {
-                    txDao.deleteById(m.id)
-                    recent.removeAll { it.id == m.id }
-                }
-            }
-
-            val resolved = resolveCategoryKey(parsed.merchantKey, parsed.merchantRaw, sms.body)
-            val learnedCard = learnedDao.get(sourceKey, LearnedTxDecisionEntity.TYPE_CARD_BILL)
-            val cardPayment = isBank &&
-                learnedCard?.decision != LearnedTxDecisionEntity.NO &&
-                (
-                    learnedCard?.decision == LearnedTxDecisionEntity.YES ||
-                        SmsDebitParser.isCardBillPayment(sms.body, parsed.merchantRaw)
-                    )
-            val cardLast4 = if (!cardPayment) {
-                SmsDebitParser.extractCardLast4(sms.body).orEmpty()
-            } else {
-                ""
-            }
-            val statusTag = if (cardPayment) SmsDebitParser.CARD_PAYMENT_NOTE else ""
-            val row = TransactionEntity(
-                smsId = sms.id,
-                amountPaise = amountPaise,
-                merchantRaw = parsed.merchantRaw,
-                merchantKey = parsed.merchantKey,
-                category = if (cardPayment) SpendCategory.BILLS.name else resolved.key,
-                occurredAt = sms.dateMs,
-                bodySnippet = sms.body.take(180),
-                sender = sms.sender,
-                dedupKey = key,
-                note = "",
-                statusTag = statusTag,
-                cardLast4 = cardLast4,
-                sourceKey = sourceKey,
-                aiStatus = if (cardPayment) TransactionEntity.AI_DONE else resolved.aiStatus,
-                type = TransactionEntity.TYPE_DEBIT,
-            )
-            val id = txDao.insertIgnore(row)
-            if (id != -1L) {
-                inserted++
-                newDebits++
-                seenDedupKeys += key
-                recent += row.copy(id = id)
-                if (isBank) {
-                    batchBankDebits += amountPaise to sms.dateMs
-                    applyUpiEventNote(id, amountPaise, sms.dateMs)
-                }
-                DiagLog.i(
-                    "scan",
-                    "insert",
-                    mapOf(
-                        "txId" to id,
-                        "merchantKey" to parsed.merchantKey,
-                        "sender" to sms.sender,
-                        "amountPaise" to amountPaise,
-                        "category" to row.category,
-                        "source" to if (cardPayment) "card_payment" else resolved.source,
-                        "aiStatus" to row.aiStatus,
-                        "snippet" to DiagLog.truncateSnippet(sms.body),
-                    ),
-                )
+                DebitInsertOutcome.MERCHANT_COVERED -> merchantConfirmSkipped++
+                DebitInsertOutcome.SKIPPED -> Unit
             }
         }
 
@@ -1096,57 +1008,14 @@ class SpendRepository(
         val myBankIds = app.smspend.domain.IndianBanks.parseIdsCsv(prefs.myBankIds.first())
         if (myBankIds.isNotEmpty()) {
             for (sms in messages) {
-                val sourceKey = TransactionEntity.sourceKeyForSms(sms.id)
-                if (learnedDao.get(sourceKey, LearnedTxDecisionEntity.TYPE_REMOVED_DUPLICATE)?.decision ==
-                    LearnedTxDecisionEntity.YES
-                ) {
-                    continue
-                }
                 val senderRules = rulesBySender[SmsDebitParser.senderKey(sms.sender)].orEmpty()
                 if (isIgnoredByRules(senderRules, sms.id, sms.body)) continue
-                val credit = CreditSmsParser.parseCredit(sms.body, sms.sender, sms.dateMs) ?: continue
-                // bankId is the bank that credited the account — i.e. money *to* that bank.
-                if (credit.bankId == null || credit.bankId !in myBankIds) continue
-                val key = SmsDebitParser.directionalDedupKey(
-                    sms.body,
-                    credit.amountPaise,
-                    sms.dateMs,
-                    isCredit = true,
-                )
-                if (key in seenDedupKeys) continue
-                val row = TransactionEntity(
-                    smsId = sms.id,
-                    amountPaise = credit.amountPaise,
-                    merchantRaw = credit.merchantRaw,
-                    merchantKey = credit.merchantKey,
-                    category = SpendCategory.CREDITS.name,
-                    occurredAt = sms.dateMs,
-                    bodySnippet = credit.bodySnippet,
-                    sender = sms.sender,
-                    dedupKey = key,
-                    note = "",
-                    sourceKey = sourceKey,
-                    aiStatus = TransactionEntity.AI_DONE,
-                    type = TransactionEntity.TYPE_CREDIT,
-                )
-                val id = txDao.insertIgnore(row)
-                if (id != -1L) {
-                    inserted++
-                    seenDedupKeys += key
-                    recent += row.copy(id = id)
-                    DiagLog.i(
-                        "scan",
-                        "insert_credit",
-                        mapOf(
-                            "txId" to id,
-                            "merchantKey" to credit.merchantKey,
-                            "sender" to sms.sender,
-                            "amountPaise" to credit.amountPaise,
-                            "bankId" to (credit.bankId ?: ""),
-                            "snippet" to DiagLog.truncateSnippet(sms.body),
-                        ),
-                    )
-                }
+                val builtin = CreditSmsParser.parseCredit(sms.body, sms.sender, sms.dateMs)
+                val credit = builtin
+                    ?: (if (SmsDebitParser.parse(sms.body, sms.sender) == null) templateCredit(senderRules, sms) else null)
+                    ?: continue
+                val source = if (builtin != null) TransactionEntity.SOURCE_RULE else TransactionEntity.SOURCE_TEMPLATE
+                if (insertParsedCredit(state, sms, credit, myBankIds, source)) inserted++
             }
         }
 
@@ -1189,6 +1058,248 @@ class SpendRepository(
         )
     }
 
+    /** Working set shared by every insert in one pass (scan or AI triage). */
+    private class InsertState(
+        val seenDedupKeys: MutableSet<String>,
+        /** Bank-is-truth working set: classify from body+sender (no schema flag). */
+        val recent: MutableList<TransactionEntity>,
+        /** amountPaise to occurredAt of bank debits inserted in this pass. */
+        val batchBankDebits: MutableList<Pair<Long, Long>> = mutableListOf(),
+    )
+
+    private enum class DebitInsertOutcome { INSERTED, MERCHANT_COVERED, SKIPPED }
+
+    private suspend fun newInsertState(sinceMs: Long): InsertState {
+        val windowMs = SmsDebitParser.CROSS_SOURCE_WINDOW_MS
+        return InsertState(
+            seenDedupKeys = txDao.listDedupKeys().toMutableSet(),
+            recent = txDao.listInRange(sinceMs - windowMs, System.currentTimeMillis() + windowMs)
+                .toMutableList(),
+        )
+    }
+
+    /**
+     * Dedup (bank replaces a merchant confirmation), merchant-confirmation suppression,
+     * card-bill detection, category resolution, insert. Shared by rule, template, and AI rows.
+     */
+    private suspend fun insertParsedDebit(
+        state: InsertState,
+        sms: RawSms,
+        parsed: ParsedDebit,
+        amountPaise: Long,
+        parseSource: String,
+    ): DebitInsertOutcome {
+        val windowMs = SmsDebitParser.CROSS_SOURCE_WINDOW_MS
+        val sourceKey = TransactionEntity.sourceKeyForSms(sms.id)
+        if (learnedDao.get(sourceKey, LearnedTxDecisionEntity.TYPE_REMOVED_DUPLICATE)?.decision ==
+            LearnedTxDecisionEntity.YES
+        ) {
+            return DebitInsertOutcome.SKIPPED
+        }
+        val key = SmsDebitParser.directionalDedupKey(sms.body, amountPaise, sms.dateMs, isCredit = false)
+        val isBank = SmsDebitParser.isBankDebit(sms.body, sms.sender)
+        if (key in state.seenDedupKeys) {
+            val existing = txDao.getByDedupKey(key)
+            val holderIsBank = existing != null &&
+                existing.isDebit() &&
+                SmsDebitParser.isBankDebit(existing.bodySnippet, existing.sender)
+            if (existing != null &&
+                SmsDebitParser.incomingBankReplacesDedupHolder(isBank, holderIsBank)
+            ) {
+                // Merchant confirmation claimed this ref first. The bank SMS is the ledger.
+                txDao.deleteById(existing.id)
+                state.recent.removeAll { it.id == existing.id }
+                state.seenDedupKeys.remove(key)
+            } else if (existing == null) {
+                state.seenDedupKeys.remove(key)
+            } else {
+                if (isBank && holderIsBank) adoptNamedPayee(existing, parsed, sms.sender)
+                return DebitInsertOutcome.SKIPPED
+            }
+        }
+
+        if (!isBank) {
+            // Merchant confirmation — skip when a bank debit already covers this amount.
+            val bankPoints = state.recent
+                .filter { SmsDebitParser.isBankDebit(it.bodySnippet, it.sender) }
+                .map { it.amountPaise to it.occurredAt } + state.batchBankDebits
+            if (SmsDebitParser.hasMatchingBankDebit(amountPaise, sms.dateMs, bankPoints, windowMs)) {
+                DiagLog.i(
+                    "scan",
+                    "parse_skip",
+                    mapOf(
+                        "reason" to "merchant_confirm_covered",
+                        "sender" to sms.sender,
+                        "amountPaise" to amountPaise,
+                        "merchantKey" to parsed.merchantKey,
+                    ),
+                )
+                return DebitInsertOutcome.MERCHANT_COVERED
+            }
+        } else {
+            // Bank wins: drop merchant-confirmation rows with the same amount in-window.
+            val merchants = state.recent.filter { tx ->
+                tx.isDebit() &&
+                    !SmsDebitParser.isBankDebit(tx.bodySnippet, tx.sender) &&
+                    tx.amountPaise == amountPaise &&
+                    abs(tx.occurredAt - sms.dateMs) <= windowMs
+            }
+            for (m in merchants) {
+                txDao.deleteById(m.id)
+                state.recent.removeAll { it.id == m.id }
+            }
+        }
+
+        val resolved = resolveCategoryKey(parsed.merchantKey, parsed.merchantRaw, sms.body)
+        val learnedCard = learnedDao.get(sourceKey, LearnedTxDecisionEntity.TYPE_CARD_BILL)
+        val cardPayment = isBank &&
+            learnedCard?.decision != LearnedTxDecisionEntity.NO &&
+            (
+                learnedCard?.decision == LearnedTxDecisionEntity.YES ||
+                    SmsDebitParser.isCardBillPayment(sms.body, parsed.merchantRaw)
+                )
+        val cardLast4 = if (!cardPayment) {
+            SmsDebitParser.extractCardLast4(sms.body).orEmpty()
+        } else {
+            ""
+        }
+        val statusTag = if (cardPayment) SmsDebitParser.CARD_PAYMENT_NOTE else ""
+        val row = TransactionEntity(
+            smsId = sms.id,
+            amountPaise = amountPaise,
+            merchantRaw = parsed.merchantRaw,
+            merchantKey = parsed.merchantKey,
+            category = if (cardPayment) SpendCategory.BILLS.name else resolved.key,
+            occurredAt = sms.dateMs,
+            bodySnippet = sms.body.take(180),
+            sender = sms.sender,
+            dedupKey = key,
+            note = "",
+            statusTag = statusTag,
+            cardLast4 = cardLast4,
+            sourceKey = sourceKey,
+            aiStatus = if (cardPayment) TransactionEntity.AI_DONE else resolved.aiStatus,
+            type = TransactionEntity.TYPE_DEBIT,
+            parseSource = parseSource,
+        )
+        val id = txDao.insertIgnore(row)
+        if (id == -1L) return DebitInsertOutcome.SKIPPED
+        state.seenDedupKeys += key
+        state.recent += row.copy(id = id)
+        if (isBank) {
+            state.batchBankDebits += amountPaise to sms.dateMs
+            applyUpiEventNote(id, amountPaise, sms.dateMs)
+        }
+        DiagLog.i(
+            "scan",
+            "insert",
+            mapOf(
+                "txId" to id,
+                "merchantKey" to parsed.merchantKey,
+                "sender" to sms.sender,
+                "amountPaise" to amountPaise,
+                "category" to row.category,
+                "source" to if (cardPayment) "card_payment" else resolved.source,
+                "parseSource" to parseSource,
+                "aiStatus" to row.aiStatus,
+                "snippet" to DiagLog.truncateSnippet(sms.body),
+            ),
+        )
+        return DebitInsertOutcome.INSERTED
+    }
+
+    /** Inbound credit to one of My banks → CREDITS row. Returns true when a row was inserted. */
+    private suspend fun insertParsedCredit(
+        state: InsertState,
+        sms: RawSms,
+        credit: ParsedCredit,
+        myBankIds: Set<String>,
+        parseSource: String,
+    ): Boolean {
+        val sourceKey = TransactionEntity.sourceKeyForSms(sms.id)
+        if (learnedDao.get(sourceKey, LearnedTxDecisionEntity.TYPE_REMOVED_DUPLICATE)?.decision ==
+            LearnedTxDecisionEntity.YES
+        ) {
+            return false
+        }
+        // bankId is the bank that credited the account — i.e. money *to* that bank.
+        if (credit.bankId == null || credit.bankId !in myBankIds) return false
+        val key = SmsDebitParser.directionalDedupKey(sms.body, credit.amountPaise, sms.dateMs, isCredit = true)
+        if (key in state.seenDedupKeys) return false
+        val row = TransactionEntity(
+            smsId = sms.id,
+            amountPaise = credit.amountPaise,
+            merchantRaw = credit.merchantRaw,
+            merchantKey = credit.merchantKey,
+            category = SpendCategory.CREDITS.name,
+            occurredAt = sms.dateMs,
+            bodySnippet = credit.bodySnippet,
+            sender = sms.sender,
+            dedupKey = key,
+            note = "",
+            sourceKey = sourceKey,
+            aiStatus = TransactionEntity.AI_DONE,
+            type = TransactionEntity.TYPE_CREDIT,
+            parseSource = parseSource,
+        )
+        val id = txDao.insertIgnore(row)
+        if (id == -1L) return false
+        state.seenDedupKeys += key
+        state.recent += row.copy(id = id)
+        DiagLog.i(
+            "scan",
+            "insert_credit",
+            mapOf(
+                "txId" to id,
+                "merchantKey" to credit.merchantKey,
+                "sender" to sms.sender,
+                "amountPaise" to credit.amountPaise,
+                "bankId" to (credit.bankId ?: ""),
+                "parseSource" to parseSource,
+                "snippet" to DiagLog.truncateSnippet(sms.body),
+            ),
+        )
+        return true
+    }
+
+    private fun templateMatch(rules: List<ParseRuleEntity>, kind: String, body: String): TemplateMatch? =
+        rules.asSequence()
+            .filter { it.kind == kind }
+            .mapNotNull { AiSmsTriage.applyTemplate(it.pattern, body) }
+            .firstOrNull()
+
+    private fun templateDebit(rules: List<ParseRuleEntity>, sms: RawSms): ParsedDebit? =
+        templateMatch(rules, ParseRuleEntity.KIND_TEMPLATE_DEBIT, sms.body)?.let { m ->
+            debitFrom(sms, m.amountPaise, m.payee)
+        }
+
+    private fun templateCredit(rules: List<ParseRuleEntity>, sms: RawSms): ParsedCredit? =
+        templateMatch(rules, ParseRuleEntity.KIND_TEMPLATE_CREDIT, sms.body)?.let { m ->
+            creditFrom(sms, m.amountPaise, m.payee)
+        }
+
+    private fun debitFrom(sms: RawSms, amountPaise: Long, payee: String?): ParsedDebit {
+        val raw = (payee ?: SmsDebitParser.extractMerchant(sms.body) ?: sms.sender.ifBlank { "Unknown" })
+            .trim()
+            .take(80)
+        return ParsedDebit(amountPaise = amountPaise, merchantRaw = raw, merchantKey = SmsDebitParser.normalizeMerchantKey(raw))
+    }
+
+    private fun creditFrom(sms: RawSms, amountPaise: Long, payee: String?): ParsedCredit {
+        val bank = app.smspend.domain.IndianBanks.matchSender(sms.sender)
+        val raw = (payee ?: bank?.label ?: sms.sender.ifBlank { "Credit" }).trim().take(80)
+        return ParsedCredit(
+            amountPaise = amountPaise,
+            upiRef = CreditSmsParser.extractUpiRef(sms.body),
+            bankId = bank?.id,
+            merchantRaw = raw,
+            merchantKey = SmsDebitParser.normalizeMerchantKey(raw),
+            bodySnippet = sms.body.take(180),
+            sender = sms.sender,
+            occurredAt = sms.dateMs,
+        )
+    }
+
     /**
      * Two bank SMS for the same ref (SBI "a/c … credited" + YONO "transfer to Aryabd"):
      * when the kept row only has the sender id as merchant, take the payee from the other.
@@ -1207,6 +1318,7 @@ class SpendRepository(
     suspend fun syncPeriod(startMs: Long, endMs: Long = DateRanges.endExclusiveNow()): SyncPeriodResult {
         val scan = scanInbox(forceFullMonth = true, sinceOverrideMs = startMs)
         val repair = repairTransactions()
+        val triage = runCatching { runAiTriagePass() }.getOrNull()
         val ai = runAiCategorizationPass()
         val pairs = findDuplicatePairCandidates()
             .filter { pair ->
@@ -1216,7 +1328,7 @@ class SpendRepository(
             }
         return SyncPeriodResult(
             scannedSms = scan.scannedSms,
-            newTransactions = scan.newTransactions,
+            newTransactions = scan.newTransactions + (triage?.inserted ?: 0),
             repaired = repair.removed + repair.fixed,
             recategorized = ai.applied + ai.fromMemory,
             selfTransfersPaired = 0,
@@ -1492,9 +1604,13 @@ class SpendRepository(
                 continue
             }
 
+            val asSms = RawSms(id = tx.smsId, body = body, sender = sender, dateMs = tx.occurredAt)
             if (tx.isCredit()) {
                 val credit = CreditSmsParser.parseCredit(body, sender, tx.occurredAt)
+                    ?: templateCredit(senderRules, asSms)
                 if (credit == null) {
+                    // AI-found rows have no local parser by definition; the user undoes them explicitly.
+                    if (tx.isLearnedParse()) continue
                     txDao.deleteById(tx.id)
                     removed++
                     continue
@@ -1527,7 +1643,11 @@ class SpendRepository(
             }
 
             val parsed = SmsDebitParser.parse(body, sender)
+                ?: templateDebit(senderRules, asSms).takeIf {
+                    CreditSmsParser.parseCredit(body, sender, tx.occurredAt) == null
+                }
             if (parsed == null) {
+                if (tx.isLearnedParse()) continue
                 val credit = CreditSmsParser.parseCredit(body, sender, tx.occurredAt)
                 // Only convert when My banks is configured and the credit is to one of them.
                 val bankOk = myBankIds.isNotEmpty() &&
@@ -2051,6 +2171,52 @@ class SpendRepository(
      * an ignore rule so rescans skip it. Without a key the transaction is just removed
      * and remembered as ignored.
      */
+    /**
+     * Undo for an AI- or template-found row: drop it, never read that SMS again, cache a
+     * NOT_TXN verdict so triage skips it, and forget any learned template that produced it.
+     * Returns the number of templates removed, or null when the row is gone.
+     */
+    suspend fun markNotTransaction(transactionId: Long): Int? = scanMutex.withLock {
+        val tx = txDao.getById(transactionId) ?: return null
+        val senderKey = SmsDebitParser.senderKey(tx.sender)
+        val body = runCatching { smsReader.readByIds(listOf(tx.smsId))[tx.smsId]?.body }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: tx.bodySnippet
+        txDao.deleteById(tx.id)
+        ruleDao.insert(
+            ParseRuleEntity(
+                senderKey = senderKey,
+                kind = ParseRuleEntity.KIND_IGNORE_SMS,
+                pattern = tx.smsId.toString(),
+                sampleSnippet = tx.bodySnippet,
+            ),
+        )
+        verdictDao.upsert(
+            AiSmsVerdictEntity(
+                smsId = tx.smsId,
+                senderKey = senderKey,
+                kind = SmsTriageVerdict.KIND_NOT_TXN,
+                model = "user",
+                bodySnippet = body.take(AiSmsTriage.MAX_BODY_CHARS),
+            ),
+        )
+        val templates = ruleDao.listAll().filter { rule ->
+            (rule.kind == ParseRuleEntity.KIND_TEMPLATE_DEBIT || rule.kind == ParseRuleEntity.KIND_TEMPLATE_CREDIT) &&
+                (
+                    rule.sourceSmsId == tx.smsId ||
+                        (rule.senderKey == senderKey && AiSmsTriage.applyTemplate(rule.pattern, body) != null)
+                    )
+        }
+        templates.forEach { ruleDao.delete(it.id) }
+        DiagLog.i(
+            "ai",
+            "not_transaction",
+            mapOf("txId" to tx.id, "parseSource" to tx.parseSource, "templatesRemoved" to templates.size),
+        )
+        return templates.size
+    }
+
     suspend fun reportWrongParse(transactionId: Long): WrongParseResult {
         val tx = txDao.getById(transactionId) ?: return WrongParseResult.NotFound
         val senderKey = SmsDebitParser.senderKey(tx.sender)
@@ -2387,6 +2553,159 @@ class SpendRepository(
 
     /** Serializes the batch pass: worker + UI refresh must not double-spend quota. */
     private val aiPassMutex = Mutex()
+
+    /**
+     * AI fallback for SMS the built-in parsers and learned templates both reject. Candidates
+     * (local filter, no cached verdict) go to Gemini in batches; DEBIT / CREDIT verdicts insert
+     * through the same dedup path as rule rows (tagged [TransactionEntity.SOURCE_AI]), every
+     * verdict is cached, and validated per-sender templates are saved so the next SMS in that
+     * format parses locally.
+     */
+    suspend fun runAiTriagePass(): AiTriageResult = triageMutex.withLock {
+        val apiKey = prefs.geminiApiKey.first()
+        if (apiKey.isBlank() || !prefs.aiTriageEnabled.first()) {
+            return AiTriageResult(0, 0, 0, 0)
+        }
+        val sinceMs = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1)
+        val messages = runCatching { smsReader.readSince(sinceMs) }.getOrDefault(emptyList())
+        if (messages.isEmpty()) return AiTriageResult(0, 0, 0, 0)
+
+        val storedSmsIds = txDao.listAll().mapTo(HashSet()) { it.smsId }
+        val judged = verdictDao.listSmsIds().toHashSet()
+        val rulesBySender = ruleDao.listAll().groupBy { it.senderKey }
+        val candidates = messages.asSequence()
+            .filter { it.id !in storedSmsIds && it.id !in judged }
+            .filter { sms ->
+                val senderRules = rulesBySender[SmsDebitParser.senderKey(sms.sender)].orEmpty()
+                !isIgnoredByRules(senderRules, sms.id, sms.body) &&
+                    SmsDebitParser.parse(sms.body, sms.sender) == null &&
+                    SmsDebitParser.parseAtmReversal(sms.body) == null &&
+                    CreditSmsParser.parseCredit(sms.body, sms.sender, sms.dateMs) == null &&
+                    templateDebit(senderRules, sms) == null &&
+                    templateCredit(senderRules, sms) == null &&
+                    AiSmsTriage.isCandidate(sms.body, sms.sender)
+            }
+            .sortedByDescending { it.dateMs }
+            .toList()
+        if (candidates.isEmpty()) {
+            DiagLog.i("ai", "triage_skip", mapOf("reason" to "no_candidates"))
+            return AiTriageResult(0, 0, 0, 0)
+        }
+
+        val toSend = candidates.take(AiSmsTriage.BATCH_SIZE * AiSmsTriage.MAX_CALLS_PER_PASS)
+        DiagLog.i("ai", "triage_start", mapOf("candidates" to candidates.size, "sending" to toSend.size))
+        val smsById = toSend.associateBy { it.id }
+        val verdicts = mutableListOf<Pair<SmsTriageVerdict, String>>()
+        var firstError: String? = null
+        for (chunk in toSend.chunked(AiSmsTriage.BATCH_SIZE)) {
+            val items = chunk.map { SmsForTriage(id = it.id, sender = it.sender, body = it.body) }
+            val (batch, model, error) = gemini.triageSms(apiKey, items)
+            if (error != null) {
+                if (firstError == null) firstError = "Gemini failed (${error.code}): ${error.message}"
+                DiagLog.e("ai", "triage_batch_fail", mapOf("code" to error.code, "message" to error.message))
+                continue
+            }
+            batch.forEach { verdicts += it to model.orEmpty() }
+        }
+
+        var inserted = 0
+        var learned = 0
+        scanMutex.withLock {
+            val state = newInsertState(sinceMs)
+            val myBankIds = app.smspend.domain.IndianBanks.parseIdsCsv(prefs.myBankIds.first())
+            val existingTemplates = ruleDao.listAll()
+                .filter { it.kind == ParseRuleEntity.KIND_TEMPLATE_DEBIT || it.kind == ParseRuleEntity.KIND_TEMPLATE_CREDIT }
+                .mapTo(HashSet()) { Triple(it.senderKey, it.kind, it.pattern) }
+            val batchNotTxnBodies = verdicts
+                .filter { it.first.kind == SmsTriageVerdict.KIND_NOT_TXN }
+                .mapNotNull { smsById[it.first.id] }
+                .groupBy({ SmsDebitParser.senderKey(it.sender) }, { it.body })
+
+            for ((verdict, model) in verdicts) {
+                val sms = smsById[verdict.id] ?: continue
+                val senderKey = SmsDebitParser.senderKey(sms.sender)
+                val amount = verdict.amountPaise
+                val isTxn = verdict.kind != SmsTriageVerdict.KIND_NOT_TXN &&
+                    amount != null && amount > 0 &&
+                    AiSmsTriage.amountAppearsIn(sms.body, amount)
+                val kind = if (isTxn) verdict.kind else SmsTriageVerdict.KIND_NOT_TXN
+                verdictDao.upsert(
+                    AiSmsVerdictEntity(
+                        smsId = sms.id,
+                        senderKey = senderKey,
+                        kind = kind,
+                        amountPaise = if (isTxn) amount ?: 0L else 0L,
+                        model = model,
+                        bodySnippet = sms.body.take(AiSmsTriage.MAX_BODY_CHARS),
+                    ),
+                )
+                if (!isTxn || amount == null) continue
+
+                val ok = if (kind == SmsTriageVerdict.KIND_DEBIT) {
+                    insertParsedDebit(
+                        state,
+                        sms,
+                        debitFrom(sms, amount, verdict.payee),
+                        amount,
+                        TransactionEntity.SOURCE_AI,
+                    ) == DebitInsertOutcome.INSERTED
+                } else {
+                    insertParsedCredit(
+                        state,
+                        sms,
+                        creditFrom(sms, amount, verdict.payee),
+                        myBankIds,
+                        TransactionEntity.SOURCE_AI,
+                    )
+                }
+                if (ok) inserted++
+
+                val template = verdict.templateRegex?.trim().orEmpty()
+                if (template.isEmpty()) continue
+                val ruleKind = if (kind == SmsTriageVerdict.KIND_DEBIT) {
+                    ParseRuleEntity.KIND_TEMPLATE_DEBIT
+                } else {
+                    ParseRuleEntity.KIND_TEMPLATE_CREDIT
+                }
+                if (Triple(senderKey, ruleKind, template) in existingTemplates) continue
+                val notTxn = verdictDao.listBodies(senderKey, SmsTriageVerdict.KIND_NOT_TXN) +
+                    batchNotTxnBodies[senderKey].orEmpty()
+                if (!AiSmsTriage.validateTemplate(template, sms.body, amount, notTxn)) {
+                    DiagLog.i("ai", "template_reject", mapOf("sender" to sms.sender, "pattern" to template.take(120)))
+                    continue
+                }
+                ruleDao.insert(
+                    ParseRuleEntity(
+                        senderKey = senderKey,
+                        kind = ruleKind,
+                        pattern = template,
+                        sampleSnippet = sms.body.take(180),
+                        sourceSmsId = sms.id,
+                    ),
+                )
+                existingTemplates += Triple(senderKey, ruleKind, template)
+                learned++
+                DiagLog.i("ai", "template_learned", mapOf("sender" to sms.sender, "kind" to ruleKind))
+            }
+            if (inserted > 0) {
+                purgeCrossSourceDuplicates()
+                applyCreditPairSelfTransfers(sinceMs)
+            }
+        }
+        val result = AiTriageResult(candidates.size, toSend.size, inserted, learned, firstError)
+        DiagLog.i(
+            "ai",
+            "triage_end",
+            mapOf(
+                "candidates" to result.candidates,
+                "sent" to result.sent,
+                "inserted" to result.inserted,
+                "templatesLearned" to result.templatesLearned,
+                "error" to result.error,
+            ),
+        )
+        return result
+    }
 
     /**
      * The batched Gemini pass: resolves PENDING transactions via merchant_memory first,

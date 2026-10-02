@@ -290,6 +290,18 @@ interface ParseRuleDao {
 }
 
 @Dao
+interface AiSmsVerdictDao {
+    @Query("SELECT smsId FROM ai_sms_verdicts")
+    suspend fun listSmsIds(): List<Long>
+
+    @Query("SELECT bodySnippet FROM ai_sms_verdicts WHERE senderKey = :senderKey AND kind = :kind")
+    suspend fun listBodies(senderKey: String, kind: String): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(verdict: AiSmsVerdictEntity)
+}
+
+@Dao
 interface CategoryNoteDao {
     @Query(
         """

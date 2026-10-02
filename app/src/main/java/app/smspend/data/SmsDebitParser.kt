@@ -259,6 +259,18 @@ object SmsDebitParser {
     fun isMerchantAppSender(sender: String): Boolean =
         isMerchantAppSenderKey(senderKey(sender))
 
+    fun isBankSender(sender: String): Boolean {
+        val key = senderKey(sender)
+        return bankSenderTokens.any { key.contains(it) }
+    }
+
+    fun isOtp(body: String): Boolean {
+        val lower = body.lowercase(Locale.US)
+        return otpPattern.matcher(lower).find() || lower.contains("one time password")
+    }
+
+    fun hasAmount(body: String): Boolean = amountPattern.matcher(body).find()
+
     private fun isMerchantAppSenderKey(key: String): Boolean =
         merchantAppSenderTokens.any { key.contains(it) }
 

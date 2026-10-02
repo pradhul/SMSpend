@@ -46,7 +46,13 @@ data class TransactionEntity(
     val cardLast4: String = "",
     /** Immutable identity for learning: always `sms:<smsId>`. */
     val sourceKey: String = "",
+    /** How the SMS was read: [SOURCE_RULE] built-in parser, [SOURCE_TEMPLATE] learned template, [SOURCE_AI] Gemini. */
+    val parseSource: String = SOURCE_RULE,
 ) {
+    fun isAiFound(): Boolean = parseSource == SOURCE_AI
+
+    fun isLearnedParse(): Boolean = parseSource == SOURCE_AI || parseSource == SOURCE_TEMPLATE
+
     fun isCredit(): Boolean = type.equals(TYPE_CREDIT, ignoreCase = true)
 
     fun isDebit(): Boolean = !isCredit()
@@ -105,6 +111,10 @@ data class TransactionEntity(
 
         const val TYPE_DEBIT = "DEBIT"
         const val TYPE_CREDIT = "CREDIT"
+
+        const val SOURCE_RULE = "RULE"
+        const val SOURCE_TEMPLATE = "TEMPLATE"
+        const val SOURCE_AI = "AI"
 
         /** Sentinel when card spend is detected but last-4 is missing. */
         const val CARD_LAST4_UNKNOWN = "?"
@@ -276,13 +286,34 @@ data class ParseRuleEntity(
     val pattern: String,
     val sampleSnippet: String,
     val createdAt: Long = System.currentTimeMillis(),
+    /** SMS a learned template was derived from (0 for user / legacy rules). */
+    val sourceSmsId: Long = 0L,
 ) {
     companion object {
         const val KIND_IGNORE_SMS = "IGNORE_SMS"
         const val KIND_IGNORE_REGEX = "IGNORE_REGEX"
         const val KIND_AMOUNT_REGEX = "AMOUNT_REGEX"
+        /** Gemini-proposed, locally validated regex with (?<amount>) / (?<payee>) groups. */
+        const val KIND_TEMPLATE_DEBIT = "TEMPLATE_DEBIT"
+        const val KIND_TEMPLATE_CREDIT = "TEMPLATE_CREDIT"
     }
 }
+
+/** Cached Gemini triage verdict so an SMS is never sent twice. */
+@Entity(
+    tableName = "ai_sms_verdicts",
+    indices = [Index(value = ["senderKey"])],
+)
+data class AiSmsVerdictEntity(
+    @PrimaryKey val smsId: Long,
+    val senderKey: String,
+    /** DEBIT | CREDIT | NOT_TXN */
+    val kind: String,
+    val amountPaise: Long = 0L,
+    val model: String = "",
+    val bodySnippet: String = "",
+    val at: Long = System.currentTimeMillis(),
+)
 
 @Entity(
     tableName = "category_notes",

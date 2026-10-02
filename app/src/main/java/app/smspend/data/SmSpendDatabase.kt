@@ -21,8 +21,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DuplicateDecisionEntity::class,
         LearnedTxDecisionEntity::class,
         SelfTransferPairEntity::class,
+        AiSmsVerdictEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false,
 )
 abstract class SmSpendDatabase : RoomDatabase() {
@@ -38,6 +39,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
     abstract fun duplicateDecisions(): DuplicateDecisionDao
     abstract fun learnedTxDecisions(): LearnedTxDecisionDao
     abstract fun selfTransferPairs(): SelfTransferPairDao
+    abstract fun aiSmsVerdicts(): AiSmsVerdictDao
 
     companion object {
         @Volatile private var instance: SmSpendDatabase? = null
@@ -368,6 +370,34 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
+        /** AI fallback: parseSource on transactions, template provenance on parse_rules, verdict cache. */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE transactions ADD COLUMN parseSource TEXT NOT NULL DEFAULT 'RULE'",
+                )
+                db.execSQL(
+                    "ALTER TABLE parse_rules ADD COLUMN sourceSmsId INTEGER NOT NULL DEFAULT 0",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_sms_verdicts (
+                        smsId INTEGER NOT NULL PRIMARY KEY,
+                        senderKey TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        amountPaise INTEGER NOT NULL,
+                        model TEXT NOT NULL,
+                        bodySnippet TEXT NOT NULL,
+                        at INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_ai_sms_verdicts_senderKey ON ai_sms_verdicts(senderKey)",
+                )
+            }
+        }
+
         fun get(context: Context): SmSpendDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -386,6 +416,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
                         MIGRATION_8_9,
                         MIGRATION_9_10,
                         MIGRATION_10_11,
+                        MIGRATION_11_12,
                     )
                     .build()
                     .also { instance = it }

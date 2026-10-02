@@ -103,7 +103,8 @@ class SmSpendApp : Application() {
             delay(1_500)
             try {
                 val result = repository.scanInbox()
-                if (result.newTransactions > 0) {
+                val aiFound = runCatching { repository.runAiTriagePass() }.getOrNull()?.inserted ?: 0
+                if (result.newTransactions + aiFound > 0) {
                     runCatching { repository.runAiCategorizationPass() }
                     runCatching { repository.refreshRecurringMerchants() }
                     runCatching { SpendWidgetUpdater.update(this@SmSpendApp) }

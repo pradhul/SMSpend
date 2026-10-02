@@ -18,6 +18,7 @@ class UserPreferences(private val context: Context) {
     private val keyMonthlyBudget = longPreferencesKey("monthly_budget_paise")
     private val keyBiometricLock = booleanPreferencesKey("biometric_lock_enabled")
     private val keyAutoScan = booleanPreferencesKey("auto_scan_enabled")
+    private val keyAiTriage = booleanPreferencesKey("ai_triage_enabled")
     private val keyParserVersion = intPreferencesKey("parser_version")
     private val keySelfNameAliases = stringPreferencesKey("self_name_aliases")
     private val keyMyBankIds = stringPreferencesKey("my_bank_ids")
@@ -38,6 +39,9 @@ class UserPreferences(private val context: Context) {
     }
     val autoScanEnabled: Flow<Boolean> = context.dataStore.data.map {
         it[keyAutoScan] != false // default true
+    }
+    val aiTriageEnabled: Flow<Boolean> = context.dataStore.data.map {
+        it[keyAiTriage] != false // default true
     }
     val parserVersion: Flow<Int> = context.dataStore.data.map {
         it[keyParserVersion] ?: 0
@@ -79,6 +83,10 @@ class UserPreferences(private val context: Context) {
 
     suspend fun setAutoScanEnabled(value: Boolean) {
         context.dataStore.edit { it[keyAutoScan] = value }
+    }
+
+    suspend fun setAiTriageEnabled(value: Boolean) {
+        context.dataStore.edit { it[keyAiTriage] = value }
     }
 
     suspend fun setParserVersion(value: Int) {

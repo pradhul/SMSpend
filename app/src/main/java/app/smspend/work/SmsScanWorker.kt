@@ -35,6 +35,10 @@ class SmsScanWorker(
             if (result.newDebitTransactions > 0) {
                 SmSpendNotifications.notifyNewSpends(applicationContext, result.newDebitTransactions)
             }
+            runCatching { app.repository.runAiTriagePass() }
+                .onFailure { e ->
+                    DiagLog.e("worker", "triage_exception", mapOf("message" to (e.message ?: "unknown")))
+                }
             // Batched Gemini pass over PENDING rows; failures stay PENDING and retry
             // on the next periodic scan, so they must not fail (or retry) the worker.
             val ai = runCatching { app.repository.runAiCategorizationPass() }

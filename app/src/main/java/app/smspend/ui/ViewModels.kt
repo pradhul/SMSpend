@@ -391,6 +391,7 @@ class HomeViewModel(
                     // Fire-and-forget so the spinner isn't held on Gemini latency;
                     // rows update live via Room flows when categories land.
                     viewModelScope.launch {
+                        runCatching { repo.runAiTriagePass() }
                         runCatching { repo.runAiCategorizationPass() }
                         runCatching { SpendWidgetUpdater.update(appContext) }
                     }
@@ -781,6 +782,7 @@ data class SettingsUiState(
     val messageIsError: Boolean = false,
     val monthlyBudgetPaise: Long? = null,
     val autoScanEnabled: Boolean = true,
+    val aiTriageEnabled: Boolean = true,
     val biometricLockEnabled: Boolean = false,
     val selfNameAliases: String = "",
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -851,8 +853,10 @@ class SettingsViewModel(
                 logSizeLabel = logSize,
             )
         },
-    ) { base, extras, banks ->
+        prefs.aiTriageEnabled,
+    ) { base, extras, banks, aiTriage ->
         base.copy(
+            aiTriageEnabled = aiTriage,
             monthlyBudgetPaise = extras.monthlyBudgetPaise,
             autoScanEnabled = extras.autoScanEnabled,
             biometricLockEnabled = extras.biometricLockEnabled,
@@ -919,6 +923,18 @@ class SettingsViewModel(
             SmsScanWorker.reschedule(appContext, enabled)
             messageIsError.value = false
             message.value = if (enabled) "Auto-scan on" else "Auto-scan paused"
+        }
+    }
+
+    fun setAiTriageEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.setAiTriageEnabled(enabled)
+            messageIsError.value = false
+            message.value = if (enabled) "AI will check SMS the rules miss" else "AI SMS check off"
+            if (enabled) {
+                runCatching { repo.runAiTriagePass() }
+                runCatching { repo.runAiCategorizationPass() }
+            }
         }
     }
 
@@ -994,6 +1010,7 @@ class SettingsViewModel(
                     message.value = "Rescanned · ${it.newTransactions} new"
                     syncLabel.value = DateRanges.formatSyncTime(repo.lastSyncAt())
                     viewModelScope.launch {
+                        runCatching { repo.runAiTriagePass() }
                         runCatching { repo.runAiCategorizationPass() }
                         runCatching { SpendWidgetUpdater.update(appContext) }
                     }
