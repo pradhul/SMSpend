@@ -1,10 +1,12 @@
 package app.smspend
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,6 +19,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
@@ -34,6 +37,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -59,6 +64,7 @@ import app.smspend.ui.SearchScreen
 import app.smspend.ui.SearchViewModel
 import app.smspend.ui.SettingsScreen
 import app.smspend.ui.SettingsViewModel
+import app.smspend.ui.SmsPermissionBanner
 import app.smspend.ui.TrendsScreen
 import app.smspend.ui.TrendsViewModel
 import app.smspend.ui.theme.LocalSmSpendColors
@@ -90,19 +96,40 @@ class MainActivity : FragmentActivity() {
                 )
                 var permissionTick by remember { mutableIntStateOf(0) }
                 val context = LocalContext.current
-                val hasSms = remember(permissionTick) {
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
-                        PackageManager.PERMISSION_GRANTED
+                // Permissions can be revoked from system Settings while the app is in the
+                // background, so re-check every time the activity resumes.
+                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { permissionTick++ }
+                val hasSms = remember(permissionTick) { SmsPermissions.canRead(context) }
+                val smsAccess = remember(permissionTick) {
+                    SmsPermissions.resolve(
+                        readGranted = hasSms,
+                        receiveGranted = SmsPermissions.canReceive(context),
+                        askedBefore = SmsPermissions.wasRequested(context),
+                        showRationale = shouldShowRequestPermissionRationale(Manifest.permission.READ_SMS),
+                    )
                 }
                 val smsPermission = rememberLauncherForActivityResult(
-                    ActivityResultContracts.RequestPermission(),
+                    ActivityResultContracts.RequestMultiplePermissions(),
                 ) { permissionTick++ }
+                val requestSms: () -> Unit = {
+                    if (smsAccess == SmsPermissions.Access.BLOCKED) {
+                        openAppSettings()
+                    } else {
+                        SmsPermissions.markRequested(context)
+                        smsPermission.launch(SmsPermissions.REQUIRED)
+                    }
+                }
                 val notifPermission = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
                 ) { }
 
-                LaunchedEffect(hasSms) {
-                    if (hasSms) app.ensureSmsInboxWatch()
+                LaunchedEffect(smsAccess) {
+                    // Existing installs have READ_SMS only; RECEIVE_SMS is in the same
+                    // permission group, so this is granted without showing a dialog.
+                    if (smsAccess == SmsPermissions.Access.NEEDS_RECEIVE) {
+                        SmsPermissions.markRequested(context)
+                        smsPermission.launch(SmsPermissions.REQUIRED)
+                    }
                 }
 
                 LaunchedEffect(onboarded) {
@@ -122,17 +149,36 @@ class MainActivity : FragmentActivity() {
                     containerColor = Paper,
                 ) { padding ->
                     BiometricGate(enabled = biometricEnabled && onboarded) {
-                        SmSpendNav(
-                            modifier = Modifier.padding(padding),
-                            app = app,
-                            onboarded = onboarded,
-                            hasSmsPermission = hasSms,
-                            onRequestSms = { smsPermission.launch(Manifest.permission.READ_SMS) },
-                        )
+                        Column(modifier = Modifier.padding(padding)) {
+                            if (onboarded && !hasSms) {
+                                SmsPermissionBanner(
+                                    blocked = smsAccess == SmsPermissions.Access.BLOCKED,
+                                    onAllow = requestSms,
+                                    onOpenSettings = ::openAppSettings,
+                                )
+                            }
+                            SmSpendNav(
+                                modifier = Modifier.weight(1f),
+                                app = app,
+                                onboarded = onboarded,
+                                hasSmsPermission = hasSms,
+                                smsBlocked = smsAccess == SmsPermissions.Access.BLOCKED,
+                                onRequestSms = requestSms,
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+
+    /** "Don't ask again" leaves the system dialog disabled; only app settings can re-grant. */
+    private fun openAppSettings() {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", packageName, null),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(intent) }
     }
 }
 
@@ -143,6 +189,7 @@ private fun SmSpendNav(
     app: SmSpendApp,
     onboarded: Boolean,
     hasSmsPermission: Boolean,
+    smsBlocked: Boolean,
     onRequestSms: () -> Unit,
 ) {
     val nav = rememberNavController()
@@ -175,6 +222,7 @@ private fun SmSpendNav(
                 )
                 OnboardingScreen(
                     hasSmsPermission = hasSmsPermission,
+                    smsBlocked = smsBlocked,
                     onRequestSms = onRequestSms,
                     viewModel = vm,
                     onFinished = {

@@ -3035,7 +3035,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
             title = "Auto-scan",
-            body = "Reads new bank SMS while the app is open, and about every 30 minutes in the background.",
+            body = "Reads new bank SMS as they arrive, and catches up whenever you open the app.",
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -4086,6 +4086,7 @@ private fun DuplicateSideBlock(
 @Composable
 fun OnboardingScreen(
     hasSmsPermission: Boolean,
+    smsBlocked: Boolean,
     onRequestSms: () -> Unit,
     viewModel: OnboardingViewModel,
     onFinished: () -> Unit,
@@ -4119,9 +4120,17 @@ fun OnboardingScreen(
             modifier = Modifier.padding(horizontal = 12.dp),
         )
         Spacer(modifier = Modifier.height(28.dp))
-        OnboardStep("1. Allow SMS", if (hasSmsPermission) "Permission granted" else "Read debit alerts only. Nothing is uploaded.") {
+        val smsStepBody = when {
+            hasSmsPermission -> "Permission granted"
+            smsBlocked -> "SMS access was denied. Open app settings → Permissions → SMS → Allow."
+            else -> "Read debit alerts only. Nothing is uploaded."
+        }
+        OnboardStep("1. Allow SMS", smsStepBody) {
             if (!hasSmsPermission) {
-                TextButton(onClick = onRequestSms) { Text("Grant SMS access", color = MintDeep) }
+                // When blocked, onRequestSms opens the app's settings page instead.
+                TextButton(onClick = onRequestSms) {
+                    Text(if (smsBlocked) "Open app settings" else "Grant SMS access", color = MintDeep)
+                }
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
