@@ -920,7 +920,9 @@ class SettingsViewModel(
     fun setAutoScanEnabled(enabled: Boolean) {
         viewModelScope.launch {
             prefs.setAutoScanEnabled(enabled)
-            SmsScanWorker.reschedule(appContext, enabled)
+            // New SMS are picked up by the SMS_RECEIVED receiver; the worker it
+            // enqueues checks this flag. Turning it off also drops queued scans.
+            if (!enabled) SmsScanWorker.cancelPending(appContext)
             messageIsError.value = false
             message.value = if (enabled) "Auto-scan on" else "Auto-scan paused"
         }

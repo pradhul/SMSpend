@@ -15,6 +15,8 @@ object SmSpendNotifications {
     const val CHANNEL_SCAN = "scan"
 
     private const val ID_SCAN = 1001
+    /** Foreground notification for expedited scans on Android 11 and below. */
+    const val ID_SCAN_FOREGROUND = 1003
     /** Cleans up notifications/channels from versions that had large-debit alerts. */
     private const val LEGACY_CHANNEL_ALERTS = "alerts"
     private const val LEGACY_ID_LARGE_DEBIT = 1002
@@ -46,6 +48,18 @@ object SmSpendNotifications {
         runCatching {
             NotificationManagerCompat.from(context).notify(ID_SCAN, notification)
         }
+    }
+
+    /** Shown only while an expedited SMS scan runs as a foreground service (API < 31). */
+    fun scanInProgress(context: Context): android.app.Notification {
+        ensureChannels(context)
+        return baseBuilder(context, CHANNEL_SCAN)
+            .setContentTitle("SMSpend")
+            .setContentText("Reading new bank SMS…")
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
     }
 
     private fun baseBuilder(context: Context, channel: String): NotificationCompat.Builder {

@@ -4,6 +4,8 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.provider.Telephony
+import app.smspend.SmsPermissionMissingException
+import app.smspend.SmsPermissions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -16,6 +18,9 @@ data class RawSms(
 
 class SmsInboxReader(private val context: Context) {
     suspend fun readSince(minDateMs: Long): List<RawSms> = withContext(Dispatchers.IO) {
+        // Without this check a revoked permission surfaces as a vague provider error
+        // (or, on some OEM ROMs, an empty cursor that looks like "0 new SMS").
+        if (!SmsPermissions.canRead(context)) throw SmsPermissionMissingException()
         val uri = Telephony.Sms.Inbox.CONTENT_URI
         val projection = arrayOf(
             Telephony.Sms._ID,
