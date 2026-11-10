@@ -161,6 +161,7 @@ fun SettingsScreen(
                     focusedLabelColor = Mute,
                 ),
             )
+            GetApiKeyLink()
             TextButton(
                 onClick = { viewModel.saveAndValidateApiKey(draftKey) },
                 enabled = !state.busy,

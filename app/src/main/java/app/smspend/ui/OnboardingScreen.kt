@@ -98,6 +98,7 @@ fun OnboardingScreen(
                 label = { Text(stringResource(R.string.onboarding_api_key)) },
                 visualTransformation = PasswordVisualTransformation(),
             )
+            GetApiKeyLink()
         }
         Spacer(modifier = Modifier.weight(1f))
         Button(

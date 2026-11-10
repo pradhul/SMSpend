@@ -109,4 +109,9 @@
     <string name="trends_what_changed_vs_last_month">What changed vs last month</string>
     <string name="trends_spend_by_month">Spend by month</string>
     <string name="trends_other">Other</string>
+    <!-- Gemini key help (onboarding + Settings) -->
+    <string name="api_key_link">Get a free API key from Google AI Studio</string>
+    <string name="api_key_link_open_label">open Google AI Studio in your browser</string>
+    <string name="api_key_link_hint">Sign in with Google, tap Create API key, then copy it and paste it here.</string>
+    <string name="api_key_link_no_browser">No browser found. Open aistudio.google.com/apikey on any device to create a key.</string>
 </resources>
