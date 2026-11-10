@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import android.provider.Settings
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -97,9 +99,9 @@ fun TrendsScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.category_back), tint = Ink)
             }
-            Text("Trends · month by month", style = MaterialTheme.typography.titleLarge, color = Ink)
+            Text(stringResource(R.string.trends_trends_month_by_month), style = MaterialTheme.typography.titleLarge, color = Ink)
         }
         Spacer(modifier = Modifier.height(8.dp))
         when {
@@ -140,7 +142,7 @@ fun TrendsScreen(
                     }
                     item(key = "top-hdr") {
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text("Top spends · this month", style = MaterialTheme.typography.titleMedium, color = Ink)
+                        Text(stringResource(R.string.trends_top_spends_this_month), style = MaterialTheme.typography.titleMedium, color = Ink)
                         Text(
                             "Amounts match the category detail for this month · MoM vs last month",
                             style = MaterialTheme.typography.bodyMedium,
@@ -181,7 +183,7 @@ internal fun TrendsSummaryCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("What changed vs last month", style = MaterialTheme.typography.labelMedium, color = Mute)
+            Text(stringResource(R.string.trends_what_changed_vs_last_month), style = MaterialTheme.typography.labelMedium, color = Mute)
             if (hasApiKey) {
                 TextButton(onClick = onRefresh, enabled = !loading) {
                     if (loading) {
@@ -264,7 +266,7 @@ internal fun MonthlySpendChartCard(snap: MonthlySpendTrend) {
             .border(1.dp, Line, RoundedCornerShape(18.dp))
             .padding(14.dp),
     ) {
-        Text("Spend by month", style = MaterialTheme.typography.labelMedium, color = Mute)
+        Text(stringResource(R.string.trends_spend_by_month), style = MaterialTheme.typography.labelMedium, color = Mute)
         Text(
             snap.thisMonthTotalPaise.paiseToCompactRupees(),
             style = MaterialTheme.typography.headlineMedium,
@@ -310,7 +312,7 @@ internal fun MonthlySpendChartCard(snap: MonthlySpendTrend) {
                             .background(Mute.copy(alpha = 0.55f)),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Other", style = MaterialTheme.typography.labelMedium, color = Ink)
+                    Text(stringResource(R.string.trends_other), style = MaterialTheme.typography.labelMedium, color = Ink)
                 }
             }
         }

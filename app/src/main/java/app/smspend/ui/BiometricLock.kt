@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.background
@@ -206,15 +208,15 @@ private fun UnlockScreen(onUnlockClick: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("SMSpend", style = MaterialTheme.typography.headlineMedium, color = Ink)
+        Text(stringResource(R.string.biometric_smspend), style = MaterialTheme.typography.headlineMedium, color = Ink)
         Spacer(modifier = Modifier.height(8.dp))
-        Text("Locked", style = MaterialTheme.typography.bodyLarge, color = Mute)
+        Text(stringResource(R.string.biometric_locked), style = MaterialTheme.typography.bodyLarge, color = Mute)
         Spacer(modifier = Modifier.height(24.dp))
         Button(
             onClick = onUnlockClick,
             colors = ButtonDefaults.buttonColors(containerColor = MintDeep),
         ) {
-            Text("Unlock")
+            Text(stringResource(R.string.biometric_unlock))
         }
     }
 }

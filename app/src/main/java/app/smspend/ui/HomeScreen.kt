@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.selection.selectable
 import android.provider.Settings
@@ -186,19 +188,19 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("SMSpend", style = MaterialTheme.typography.headlineMedium, color = Ink)
+            Text(stringResource(R.string.biometric_smspend), style = MaterialTheme.typography.headlineMedium, color = Ink)
             Row {
                 IconButton(onClick = onOpenSearch) {
-                    Icon(Icons.Default.Search, contentDescription = "Search", tint = Ink)
+                    Icon(Icons.Default.Search, contentDescription = stringResource(R.string.home_search), tint = Ink)
                 }
                 IconButton(onClick = onOpenTrends) {
-                    Icon(Icons.Default.ShowChart, contentDescription = "Trends", tint = Ink)
+                    Icon(Icons.Default.ShowChart, contentDescription = stringResource(R.string.home_trends), tint = Ink)
                 }
                 IconButton(onClick = onOpenExports) {
-                    Icon(Icons.Default.TableChart, contentDescription = "Report & export", tint = Ink)
+                    Icon(Icons.Default.TableChart, contentDescription = stringResource(R.string.home_report_export), tint = Ink)
                 }
                 IconButton(onClick = onOpenSettings) {
-                    Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Ink)
+                    Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.home_settings), tint = Ink)
                 }
             }
         }
@@ -591,7 +593,7 @@ internal fun PeriodSpendPage(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Likely due soon", style = MaterialTheme.typography.labelMedium, color = Mute)
+                            Text(stringResource(R.string.home_likely_due_soon), style = MaterialTheme.typography.labelMedium, color = Mute)
                             Text(
                                 "From your recurring spend pattern",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -611,9 +613,9 @@ internal fun PeriodSpendPage(
                                         color = MintDeep,
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Asking…", color = MintDeep, style = MaterialTheme.typography.labelLarge)
+                                    Text(stringResource(R.string.home_asking), color = MintDeep, style = MaterialTheme.typography.labelLarge)
                                 } else {
-                                    Text("Why?", color = MintDeep, style = MaterialTheme.typography.labelLarge)
+                                    Text(stringResource(R.string.home_why), color = MintDeep, style = MaterialTheme.typography.labelLarge)
                                 }
                             }
                         }
@@ -677,7 +679,7 @@ internal fun PeriodSpendPage(
                             span = { GridItemSpan(maxLineSpan) },
                         ) {
                             Column {
-                                Text("Spending", style = MaterialTheme.typography.titleMedium, color = Ink)
+                                Text(stringResource(R.string.home_spending), style = MaterialTheme.typography.titleMedium, color = Ink)
                                 if (spending.isEmpty()) {
                                     Text(
                                         "No consumption spend this period.",
@@ -1218,7 +1220,7 @@ internal fun PeriodHero(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("SAVED & INVESTED", style = MaterialTheme.typography.labelMedium, color = Ok)
+                        Text(stringResource(R.string.home_saved_invested), style = MaterialTheme.typography.labelMedium, color = Ok)
                         Text(
                             "Set aside — not spending",
                             style = MaterialTheme.typography.bodyMedium,
@@ -1235,7 +1237,7 @@ internal fun PeriodHero(
             }
             if (drawChart && spending.isNotEmpty() && spendTotalPaise > 0) {
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("Of spending", style = MaterialTheme.typography.labelMedium, color = Mute)
+                Text(stringResource(R.string.home_of_spending), style = MaterialTheme.typography.labelMedium, color = Mute)
                 Spacer(modifier = Modifier.height(8.dp))
                 CategorySpendDonut(categories = spending, totalPaise = spendTotalPaise)
             }

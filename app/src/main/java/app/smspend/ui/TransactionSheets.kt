@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
@@ -127,7 +129,7 @@ fun TransactionDetailSheet(
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            Text("TRANSACTION", style = MaterialTheme.typography.labelMedium, color = Mute)
+            Text(stringResource(R.string.transaction_transaction), style = MaterialTheme.typography.labelMedium, color = Mute)
             Text(
                 transaction.merchantRaw,
                 style = MaterialTheme.typography.titleLarge,
@@ -168,7 +170,7 @@ fun TransactionDetailSheet(
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
-            Text("TAG", style = MaterialTheme.typography.labelMedium, color = Mute)
+            Text(stringResource(R.string.transaction_tag), style = MaterialTheme.typography.labelMedium, color = Mute)
             if (transaction.statusTag.isNotBlank()) {
                 Text(
                     "Status: ${transaction.statusTag}",
@@ -185,7 +187,7 @@ fun TransactionDetailSheet(
                 value = draftNote,
                 onValueChange = { draftNote = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Bike taxi, Grocery, Rahul…") },
+                placeholder = { Text(stringResource(R.string.transaction_bike_taxi_grocery_rahul)) },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Ink,
@@ -202,7 +204,7 @@ fun TransactionDetailSheet(
                 },
                 enabled = draftNote.trim() != transaction.note.trim(),
             ) {
-                Text("Save tags", color = MintDeep)
+                Text(stringResource(R.string.transaction_save_tags), color = MintDeep)
             }
             if (recentTags.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -242,7 +244,7 @@ fun TransactionDetailSheet(
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
-            Text("STATUS", style = MaterialTheme.typography.labelMedium, color = Mute)
+            Text(stringResource(R.string.transaction_status), style = MaterialTheme.typography.labelMedium, color = Mute)
             if (transaction.isPossibleDuplicateNote()) {
                 OutlinedButton(
                     onClick = {
@@ -254,7 +256,7 @@ fun TransactionDetailSheet(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("Not a duplicate", color = Ok)
+                    Text(stringResource(R.string.transaction_not_a_duplicate), color = Ok)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
@@ -295,7 +297,7 @@ fun TransactionDetailSheet(
                         }
                     }
                     TextButton(onClick = { showMarkDuplicate = false }) {
-                        Text("Cancel", color = Mute)
+                        Text(stringResource(R.string.transaction_cancel), color = Mute)
                     }
                 } else if (!transaction.isPossibleDuplicateNote()) {
                     OutlinedButton(
@@ -303,7 +305,7 @@ fun TransactionDetailSheet(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
                     ) {
-                        Text("Mark as duplicate", color = Ink)
+                        Text(stringResource(R.string.transaction_mark_as_duplicate), color = Ink)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                 }
@@ -318,7 +320,7 @@ fun TransactionDetailSheet(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
                     ) {
-                        Text("Not a card bill payment", color = Debit)
+                        Text(stringResource(R.string.transaction_not_a_card_bill_payment), color = Debit)
                     }
                 } else {
                     OutlinedButton(
@@ -331,13 +333,13 @@ fun TransactionDetailSheet(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
                     ) {
-                        Text("Mark as card bill payment", color = Ink)
+                        Text(stringResource(R.string.transaction_mark_as_card_bill_payment), color = Ink)
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
             Spacer(modifier = Modifier.height(8.dp))
-            Text("SOURCE SMS", style = MaterialTheme.typography.labelMedium, color = Mute)
+            Text(stringResource(R.string.transaction_source_sms), style = MaterialTheme.typography.labelMedium, color = Mute)
             Text(
                 "From ${transaction.sender}",
                 style = MaterialTheme.typography.bodyMedium,
@@ -366,7 +368,7 @@ fun TransactionDetailSheet(
                 colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text("Change category")
+                Text(stringResource(R.string.transaction_change_category))
             }
             if (transaction.isLearnedParse()) {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -401,7 +403,7 @@ fun TransactionDetailSheet(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("Not a transaction", color = Debit)
+                    Text(stringResource(R.string.transaction_not_a_transaction), color = Debit)
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
@@ -422,7 +424,7 @@ fun TransactionDetailSheet(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                 }
-                Text("This was parsed wrong", color = Debit)
+                Text(stringResource(R.string.transaction_this_was_parsed_wrong), color = Debit)
             }
             Text(
                 if (hasApiKey) {
@@ -500,9 +502,9 @@ internal fun DuplicateStatusSheet(
                     .padding(horizontal = 20.dp, vertical = 24.dp)
                     .fillMaxWidth(),
             ) {
-                Text("Possible duplicate", style = MaterialTheme.typography.titleLarge, color = Ink)
+                Text(stringResource(R.string.transaction_possible_duplicate), style = MaterialTheme.typography.titleLarge, color = Ink)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Checking the other copy…", style = MaterialTheme.typography.bodyMedium, color = Mute)
+                Text(stringResource(R.string.transaction_checking_the_other_copy), style = MaterialTheme.typography.bodyMedium, color = Mute)
             }
         }
         return
@@ -519,7 +521,7 @@ internal fun DuplicateStatusSheet(
                     .padding(horizontal = 20.dp, vertical = 8.dp)
                     .fillMaxWidth(),
             ) {
-                Text("Possible duplicate", style = MaterialTheme.typography.titleLarge, color = Ink)
+                Text(stringResource(R.string.transaction_possible_duplicate), style = MaterialTheme.typography.titleLarge, color = Ink)
                 Text(
                     "${transaction.merchantRaw} · ${transaction.amountPaise.paiseToCompactRupees()}",
                     style = MaterialTheme.typography.bodyMedium,
@@ -542,7 +544,7 @@ internal fun DuplicateStatusSheet(
                     colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("Not a duplicate — count it")
+                    Text(stringResource(R.string.transaction_not_a_duplicate_count_it))
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedButton(
@@ -550,7 +552,7 @@ internal fun DuplicateStatusSheet(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("Keep muted", color = Mute)
+                    Text(stringResource(R.string.transaction_keep_muted), color = Mute)
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
@@ -650,7 +652,7 @@ fun DuplicateCompareSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Possible duplicate", style = MaterialTheme.typography.titleLarge, color = Ink)
+                Text(stringResource(R.string.transaction_possible_duplicate), style = MaterialTheme.typography.titleLarge, color = Ink)
                 positionLabel?.let {
                     Text(it, style = MaterialTheme.typography.labelMedium, color = Mute)
                 }
@@ -689,7 +691,7 @@ fun DuplicateCompareSheet(
                     colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("Mute this copy")
+                    Text(stringResource(R.string.transaction_mute_this_copy))
                 }
                 Text(
                     "Keeps it visible but excludes it from totals. Reversible anytime.",
@@ -704,7 +706,7 @@ fun DuplicateCompareSheet(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text("Keep both — separate payments", color = Ok)
+                Text(stringResource(R.string.transaction_keep_both_separate_payments), color = Ok)
             }
             TextButton(
                 onClick = { confirmDelete = true },
@@ -718,7 +720,7 @@ fun DuplicateCompareSheet(
             ) {
                 if (onSkip != null) {
                     TextButton(onClick = onSkip) {
-                        Text("Skip", color = Mute)
+                        Text(stringResource(R.string.transaction_skip), color = Mute)
                     }
                 } else {
                     Spacer(modifier = Modifier.width(1.dp))
@@ -734,7 +736,7 @@ fun DuplicateCompareSheet(
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             containerColor = PaperRaised,
-            title = { Text("Delete this copy?", color = Ink) },
+            title = { Text(stringResource(R.string.transaction_delete_this_copy), color = Ink) },
             text = {
                 Text(
                     "Removes it from SMSpend and skips it on future scans. " +
@@ -749,12 +751,12 @@ fun DuplicateCompareSheet(
                         onDelete()
                     },
                 ) {
-                    Text("Delete", color = Debit)
+                    Text(stringResource(R.string.category_delete), color = Debit)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) {
-                    Text("Cancel", color = Mute)
+                    Text(stringResource(R.string.transaction_cancel), color = Mute)
                 }
             },
         )
@@ -850,12 +852,12 @@ fun RetagSheet(
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("Category") },
+                    text = { Text(stringResource(R.string.transaction_category)) },
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("Tags") },
+                    text = { Text(stringResource(R.string.transaction_tags)) },
                 )
             }
             Spacer(modifier = Modifier.height(12.dp))
@@ -917,7 +919,7 @@ fun RetagSheet(
                         }
                     }
                     if (customCategoryKeys.isNotEmpty()) {
-                        Text("Your categories", style = MaterialTheme.typography.labelMedium, color = Mute)
+                        Text(stringResource(R.string.transaction_your_categories), style = MaterialTheme.typography.labelMedium, color = Mute)
                         customCategoryKeys.chunked(2).forEach { row ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 row.forEach { key ->
@@ -958,7 +960,7 @@ fun RetagSheet(
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Or type a new category") },
+                    label = { Text(stringResource(R.string.transaction_or_type_a_new_category)) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Ink,
@@ -993,7 +995,7 @@ fun RetagSheet(
                     colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("Save")
+                    Text(stringResource(R.string.transaction_save))
                 }
                 if (hasApiKey) {
                     Spacer(modifier = Modifier.height(8.dp))
@@ -1006,7 +1008,7 @@ fun RetagSheet(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
                     ) {
-                        Text("Ask Gemini", color = Ink)
+                        Text(stringResource(R.string.transaction_ask_gemini), color = Ink)
                     }
                 }
             } else {
@@ -1026,7 +1028,7 @@ fun RetagSheet(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
                     ) {
-                        Text("Clear status tag", color = Debit)
+                        Text(stringResource(R.string.transaction_clear_status_tag), color = Debit)
                     }
                 }
                 fun mergedTags(): List<String> {
@@ -1044,7 +1046,7 @@ fun RetagSheet(
                     mergedTags().map { TransactionEntity.normalizeUserTag(it) } != storedNorm
 
                 if (draftTags.isNotEmpty()) {
-                    Text("Tags on this transaction", style = MaterialTheme.typography.labelMedium, color = Mute)
+                    Text(stringResource(R.string.transaction_tags_on_this_transaction), style = MaterialTheme.typography.labelMedium, color = Mute)
                     Spacer(modifier = Modifier.height(8.dp))
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1073,8 +1075,8 @@ fun RetagSheet(
                     value = newTagText,
                     onValueChange = { newTagText = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Add tag") },
-                    placeholder = { Text("Bike taxi, Grocery, Rahul…") },
+                    label = { Text(stringResource(R.string.transaction_rows_add_tag)) },
+                    placeholder = { Text(stringResource(R.string.transaction_bike_taxi_grocery_rahul)) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Ink,
@@ -1090,17 +1092,17 @@ fun RetagSheet(
                     colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("Save tags")
+                    Text(stringResource(R.string.transaction_save_tags))
                 }
                 if (!systemNote && transaction.userTags().isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     TextButton(onClick = { onSaveTag("") }) {
-                        Text("Remove all tags", color = Debit)
+                        Text(stringResource(R.string.transaction_remove_all_tags), color = Debit)
                     }
                 }
                 if (recentTags.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text("Recent tags", style = MaterialTheme.typography.labelMedium, color = Mute)
+                    Text(stringResource(R.string.transaction_recent_tags), style = MaterialTheme.typography.labelMedium, color = Mute)
                     Spacer(modifier = Modifier.height(8.dp))
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),

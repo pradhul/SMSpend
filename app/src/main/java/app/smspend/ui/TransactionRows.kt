@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -171,7 +173,7 @@ internal fun TransactionRowContent(
             ) {
                 Icon(
                     Icons.Default.LocalOffer,
-                    contentDescription = "Add tag",
+                    contentDescription = stringResource(R.string.transaction_rows_add_tag),
                     tint = if (tx.note.isNotBlank()) MintDeep else Mute,
                     modifier = Modifier.size(20.dp),
                 )

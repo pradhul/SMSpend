@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -99,9 +101,9 @@ fun ExportsScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.category_back), tint = Ink)
             }
-            Text("Report · this month", style = MaterialTheme.typography.titleLarge, color = Ink)
+            Text(stringResource(R.string.exports_report_this_month), style = MaterialTheme.typography.titleLarge, color = Ink)
         }
         Spacer(modifier = Modifier.height(8.dp))
         when {
@@ -180,7 +182,7 @@ private fun ReportSummaryCard(
             .border(1.dp, Line, RoundedCornerShape(18.dp))
             .padding(14.dp),
     ) {
-        Text("All recorded spendings", style = MaterialTheme.typography.labelMedium, color = Mute)
+        Text(stringResource(R.string.exports_all_recorded_spendings), style = MaterialTheme.typography.labelMedium, color = Mute)
         Text(
             totalPaise.paiseToCompactRupees(),
             style = MaterialTheme.typography.headlineMedium,
@@ -208,7 +210,7 @@ private fun ReportSummaryCard(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                 }
-                Text("Save CSV", style = MaterialTheme.typography.labelLarge)
+                Text(stringResource(R.string.exports_save_csv), style = MaterialTheme.typography.labelLarge)
             }
             if (hasApiKey) {
                 Spacer(modifier = Modifier.width(8.dp))

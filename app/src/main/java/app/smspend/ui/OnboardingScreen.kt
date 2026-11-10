@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -66,7 +68,7 @@ fun OnboardingScreen(
             Text("₹", color = Mint, style = MaterialTheme.typography.displayLarge)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        Text("SMSpend", style = MaterialTheme.typography.headlineMedium, color = Ink)
+        Text(stringResource(R.string.biometric_smspend), style = MaterialTheme.typography.headlineMedium, color = Ink)
         Text(
             "See this week’s spending from your bank SMS — private, on this phone.",
             style = MaterialTheme.typography.bodyMedium,
@@ -93,7 +95,7 @@ fun OnboardingScreen(
                 value = apiKey,
                 onValueChange = { apiKey = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("API key") },
+                label = { Text(stringResource(R.string.onboarding_api_key)) },
                 visualTransformation = PasswordVisualTransformation(),
             )
         }

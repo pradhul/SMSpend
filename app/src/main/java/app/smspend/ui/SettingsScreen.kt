@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.selection.selectable
 import android.Manifest
@@ -136,14 +138,14 @@ fun SettingsScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.category_back), tint = Ink)
             }
-            Text("Settings", style = MaterialTheme.typography.titleLarge, color = Ink)
+            Text(stringResource(R.string.home_settings), style = MaterialTheme.typography.titleLarge, color = Ink)
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Gemini API key",
-            body = "Used for unknown merchants and Recategorize with Gemini. Key stays on this phone.",
+            title = stringResource(R.string.settings_gemini_api_key),
+            body = stringResource(R.string.settings_used_for_unknown_merchants_and),
         ) {
             OutlinedTextField(
                 value = draftKey,
@@ -151,7 +153,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .onFocusChanged { keyFocused = it.isFocused },
-                label = { Text("API key") },
+                label = { Text(stringResource(R.string.onboarding_api_key)) },
                 visualTransformation = PasswordVisualTransformation(),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Ink,
@@ -171,13 +173,13 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                 }
-                Text("Save & check key", color = MintDeep)
+                Text(stringResource(R.string.settings_save_check_key), color = MintDeep)
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Monthly budget",
-            body = "How much you plan to spend each month. Savings and investments don't count.",
+            title = stringResource(R.string.settings_monthly_budget),
+            body = stringResource(R.string.settings_how_much_you_plan_to),
         ) {
             OutlinedTextField(
                 value = draftBudget,
@@ -185,7 +187,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .onFocusChanged { budgetFocused = it.isFocused },
-                label = { Text("Rupees per month") },
+                label = { Text(stringResource(R.string.settings_rupees_per_month)) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Ink,
                     unfocusedBorderColor = Line,
@@ -193,13 +195,13 @@ fun SettingsScreen(
                 ),
             )
             TextButton(onClick = { viewModel.setMonthlyBudgetRupees(draftBudget) }) {
-                Text("Save budget", color = MintDeep)
+                Text(stringResource(R.string.settings_save_budget), color = MintDeep)
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Appearance",
-            body = "Light keeps the paper look. Dark uses a warm, low-glare palette for night use.",
+            title = stringResource(R.string.settings_appearance),
+            body = stringResource(R.string.settings_light_keeps_the_paper_look),
         ) {
             ThemeModePicker(
                 selected = state.themeMode,
@@ -208,15 +210,15 @@ fun SettingsScreen(
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Auto-scan",
-            body = "Reads new bank SMS as they arrive, and catches up whenever you open the app.",
+            title = stringResource(R.string.settings_auto_scan),
+            body = stringResource(R.string.settings_reads_new_bank_sms_as),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Auto-scan SMS", color = Ink)
+                Text(stringResource(R.string.settings_auto_scan_sms), color = Ink)
                 Switch(
                     checked = state.autoScanEnabled,
                     onCheckedChange = { viewModel.setAutoScanEnabled(it) },
@@ -228,7 +230,7 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Use AI to catch missed bank SMS", color = Ink)
+                    Text(stringResource(R.string.settings_use_ai_to_catch_missed), color = Ink)
                     Text(
                         if (state.apiKey.isBlank()) "Needs a Gemini API key" else "Found spends get an AI badge you can undo",
                         color = Mute,
@@ -245,7 +247,7 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("App lock (biometric)", color = Ink)
+                Text(stringResource(R.string.settings_app_lock_biometric), color = Ink)
                 Switch(
                     checked = state.biometricLockEnabled,
                     onCheckedChange = { enabled ->
@@ -269,8 +271,8 @@ fun SettingsScreen(
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Self transfers",
-            body = "Your name aliases (comma-separated). Matching payees are marked Self transfer and excluded from spending — e.g. Pradhul, PRADHULDEV.",
+            title = stringResource(R.string.settings_self_transfers),
+            body = stringResource(R.string.settings_your_name_aliases_comma_separated),
         ) {
             OutlinedTextField(
                 value = draftSelfNames,
@@ -278,7 +280,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .onFocusChanged { namesFocused = it.isFocused },
-                label = { Text("Your name(s)") },
+                label = { Text(stringResource(R.string.settings_your_name_s)) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Ink,
                     unfocusedBorderColor = Line,
@@ -286,13 +288,13 @@ fun SettingsScreen(
                 ),
             )
             TextButton(onClick = { viewModel.setSelfNameAliases(draftSelfNames) }) {
-                Text("Save names", color = MintDeep)
+                Text(stringResource(R.string.settings_save_names), color = MintDeep)
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Capture UPI app notifications",
-            body = "Reads PhonePe payment notifications to auto-fill payee (and note when the app includes it) on matching bank SMS. Open system settings and enable SMSpend under notification access.",
+            title = stringResource(R.string.settings_capture_upi_app_notifications),
+            body = stringResource(R.string.settings_reads_phonepe_payment_notifications_to),
         ) {
             val context = LocalContext.current
             var listenerEnabled by remember {
@@ -343,8 +345,8 @@ fun SettingsScreen(
         SettingsCard(title = "SMS scanning", body = "Last sync · ${state.lastSyncLabel}. Use Sync this period on Home to scan, repair, and clean duplicates.") {}
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Your banks",
-            body = "Used to detect money moving between your own accounts (self transfers).",
+            title = stringResource(R.string.bank_and_duplicate_your_banks),
+            body = stringResource(R.string.settings_used_to_detect_money_moving),
         ) {
             OutlinedButton(
                 onClick = { viewModel.openMyBanksEditor() },
@@ -369,8 +371,8 @@ fun SettingsScreen(
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Export transactions",
-            body = "Only runs when you tap a button below. Saves a JSON file to your public Downloads folder that contains full SMS text, so other apps with file access can read it — delete it once you're done. “Other” exports categorized Other spends; “ALL inbox SMS” dumps every message on the device (no date limit).",
+            title = stringResource(R.string.settings_export_transactions),
+            body = stringResource(R.string.settings_only_runs_when_you_tap),
         ) {
             OutlinedButton(
                 onClick = {
@@ -385,7 +387,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text("Export Other SMS to Downloads", color = Ink)
+                Text(stringResource(R.string.settings_export_other_sms_to_downloads), color = Ink)
             }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedButton(
@@ -401,12 +403,12 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text("Export ALL inbox SMS", color = Ink)
+                Text(stringResource(R.string.settings_export_all_inbox_sms), color = Ink)
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Diagnostics",
+            title = stringResource(R.string.settings_diagnostics),
             body = "Rolling on-device categorization log (${state.logSizeLabel}). SMS text in it is masked (digits hidden). It's only saved to Downloads when you tap Export; clear it to free space.",
         ) {
             OutlinedButton(
@@ -422,7 +424,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text("Export categorization log", color = Ink)
+                Text(stringResource(R.string.settings_export_categorization_log), color = Ink)
             }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedButton(
@@ -431,13 +433,13 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text("Clear log", color = Ink)
+                Text(stringResource(R.string.settings_clear_log), color = Ink)
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
-            title = "Reset category learning",
-            body = "SMSpend remembers the category you pick for each merchant and reuses it. Reset this if categories keep coming out wrong.",
+            title = stringResource(R.string.settings_reset_category_learning),
+            body = stringResource(R.string.settings_smspend_remembers_the_category_you),
         ) {
             OutlinedButton(
                 onClick = { viewModel.clearMemory() },
@@ -445,7 +447,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text("Reset learning", color = Ink)
+                Text(stringResource(R.string.settings_reset_learning), color = Ink)
             }
         }
         AnimatedVisibility(

@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -78,14 +80,14 @@ fun SearchScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.category_back), tint = Ink)
             }
             OutlinedTextField(
                 value = query,
                 onValueChange = viewModel::setQuery,
                 modifier = Modifier.weight(1f),
                 singleLine = true,
-                placeholder = { Text("Merchant, note, category…") },
+                placeholder = { Text(stringResource(R.string.search_merchant_note_category)) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MintDeep,
                     unfocusedBorderColor = Line,
@@ -97,9 +99,9 @@ fun SearchScreen(
         }
         Spacer(modifier = Modifier.height(12.dp))
         if (query.isBlank()) {
-            Text("Type to search all transactions", style = MaterialTheme.typography.bodyMedium, color = Mute)
+            Text(stringResource(R.string.search_type_to_search_all_transactions), style = MaterialTheme.typography.bodyMedium, color = Mute)
         } else if (results.isEmpty()) {
-            Text("No matches", style = MaterialTheme.typography.bodyMedium, color = Mute)
+            Text(stringResource(R.string.search_no_matches), style = MaterialTheme.typography.bodyMedium, color = Mute)
         } else {
             LazyColumn {
                 items(results, key = { it.id }) { tx ->

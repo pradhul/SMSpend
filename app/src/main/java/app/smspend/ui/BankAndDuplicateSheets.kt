@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -82,7 +84,7 @@ fun MyBanksSheet(
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .height(520.dp),
         ) {
-            Text("Your banks", style = MaterialTheme.typography.titleLarge, color = Ink)
+            Text(stringResource(R.string.bank_and_duplicate_your_banks), style = MaterialTheme.typography.titleLarge, color = Ink)
             Text(
                 "Pre-selected from SMS on this phone. Used to detect transfers between your own accounts.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -93,7 +95,7 @@ fun MyBanksSheet(
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Search banks") },
+                label = { Text(stringResource(R.string.bank_and_duplicate_search_banks)) },
                 singleLine = true,
             )
             Spacer(modifier = Modifier.height(8.dp))
@@ -156,10 +158,10 @@ fun MyBanksSheet(
                 colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Mint),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text("Save banks")
+                Text(stringResource(R.string.bank_and_duplicate_save_banks))
             }
             TextButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) {
-                Text("Skip for now", color = Mute)
+                Text(stringResource(R.string.bank_and_duplicate_skip_for_now), color = Mute)
             }
             Spacer(modifier = Modifier.height(12.dp))
         }

@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -111,7 +113,7 @@ fun CategoryScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.category_back), tint = Ink)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -174,7 +176,7 @@ fun CategoryScreen(
         }
         if (monthTotals.size >= 2) {
             Spacer(modifier = Modifier.height(12.dp))
-            Text("This year", style = MaterialTheme.typography.labelMedium, color = Mute)
+            Text(stringResource(R.string.category_this_year), style = MaterialTheme.typography.labelMedium, color = Mute)
             Spacer(modifier = Modifier.height(6.dp))
             CategorySparkline(values = monthTotals, color = accent)
             Row(
@@ -194,7 +196,7 @@ fun CategoryScreen(
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
-        Text("Notes", style = MaterialTheme.typography.titleMedium, color = Ink)
+        Text(stringResource(R.string.category_notes), style = MaterialTheme.typography.titleMedium, color = Ink)
         notes.forEach { note: CategoryNoteEntity ->
             Row(
                 modifier = Modifier
@@ -210,7 +212,7 @@ fun CategoryScreen(
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = { viewModel.deleteNote(note.id) }) {
-                    Text("Delete", color = Debit)
+                    Text(stringResource(R.string.category_delete), color = Debit)
                 }
             }
         }
@@ -218,7 +220,7 @@ fun CategoryScreen(
             value = draftNote,
             onValueChange = { draftNote = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Add a note") },
+            label = { Text(stringResource(R.string.category_add_a_note)) },
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = Ink,
                 unfocusedBorderColor = Line,
@@ -235,10 +237,10 @@ fun CategoryScreen(
             },
             enabled = draftNote.isNotBlank(),
         ) {
-            Text("Add note", color = MintDeep)
+            Text(stringResource(R.string.category_add_note), color = MintDeep)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        Text("Transactions", style = MaterialTheme.typography.titleMedium, color = Ink)
+        Text(stringResource(R.string.category_transactions), style = MaterialTheme.typography.titleMedium, color = Ink)
         Text(
             "Tap category · tag button · hold for SMS",
             style = MaterialTheme.typography.bodyMedium,
