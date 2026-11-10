@@ -91,6 +91,6 @@ class SmsInboxReader(private val context: Context) {
     }
 
     companion object {
-        val inboxUri: Uri = Telephony.Sms.Inbox.CONTENT_URI
+        val inboxUri: Uri get() = Telephony.Sms.Inbox.CONTENT_URI
     }
 }

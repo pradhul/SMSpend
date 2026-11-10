@@ -265,7 +265,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
                             SET note = ?, statusTag = ?, cardLast4 = ?, sourceKey = ?, dedupKey = ?
                             WHERE id = ?
                             """.trimIndent(),
-                            arrayOf(userNote, status, cardLast4, sourceKey, newDedup, id),
+                            arrayOf<Any?>(userNote, status, cardLast4, sourceKey, newDedup, id),
                         )
                     }
                 }
@@ -304,7 +304,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
                             (sourceKey, decisionType, decision, decidedAt)
                             VALUES (?, ?, ?, ?)
                             """.trimIndent(),
-                            arrayOf(sourceKey, dtype, dval, decidedAt),
+                            arrayOf<Any?>(sourceKey, dtype, dval, decidedAt),
                         )
                     }
                 }
@@ -335,7 +335,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
                             INSERT OR REPLACE INTO duplicate_decisions (pairKey, decision, decidedAt)
                             VALUES (?, ?, ?)
                             """.trimIndent(),
-                            arrayOf(key, decision, decidedAt),
+                            arrayOf<Any?>(key, decision, decidedAt),
                         )
                     }
                 }
