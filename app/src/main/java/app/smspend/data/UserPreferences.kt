@@ -24,6 +24,7 @@ class UserPreferences(private val context: Context) {
     private val keyMyBankIds = stringPreferencesKey("my_bank_ids")
     private val keyMyBanksConfigured = booleanPreferencesKey("my_banks_configured")
     private val keyThemeMode = stringPreferencesKey("theme_mode")
+    private val keyAiTriageWatermark = longPreferencesKey("ai_triage_watermark_ms")
 
     val geminiApiKey: Flow<String> = context.dataStore.data.map { it[keyApi].orEmpty() }
     /** "system" (default), "light", or "dark". See ui.theme.ThemeMode. */
@@ -56,6 +57,13 @@ class UserPreferences(private val context: Context) {
     }
     val myBanksConfigured: Flow<Boolean> = context.dataStore.data.map {
         it[keyMyBanksConfigured] == true
+    }
+
+    /** Newest SMS date an AI triage pass fully handled (incremental passes start here). */
+    val aiTriageWatermarkMs: Flow<Long> = context.dataStore.data.map { it[keyAiTriageWatermark] ?: 0L }
+
+    suspend fun setAiTriageWatermarkMs(value: Long) {
+        context.dataStore.edit { it[keyAiTriageWatermark] = value }
     }
 
     suspend fun setGeminiApiKey(value: String) {

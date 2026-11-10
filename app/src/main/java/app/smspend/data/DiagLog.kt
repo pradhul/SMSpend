@@ -13,6 +13,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.Executors
+import app.smspend.util.runCatchingCancellable
 
 /**
  * On-device rolling JSONL log for categorization diagnostics.
@@ -104,7 +105,7 @@ object DiagLog {
             .take(24)
             .ifBlank { "device" }
         val fileName = "smspend-categorize-$device-$stamp.jsonl"
-        val written = runCatching { writeToDownloads(context, fileName, bytes) }.getOrElse { e ->
+        val written = runCatchingCancellable { writeToDownloads(context, fileName, bytes) }.getOrElse { e ->
             return OtherExportResult(
                 count = 0,
                 fileName = null,

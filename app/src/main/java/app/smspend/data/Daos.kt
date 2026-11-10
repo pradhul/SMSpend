@@ -78,6 +78,41 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions ORDER BY occurredAt DESC")
     suspend fun listAll(): List<TransactionEntity>
 
+    /** Debits (anything not CREDIT) in a time range, newest first. */
+    @Query(
+        """
+        SELECT * FROM transactions
+        WHERE occurredAt >= :fromMs AND occurredAt < :toMs AND UPPER(type) != 'CREDIT'
+        ORDER BY occurredAt DESC
+        """,
+    )
+    suspend fun listDebitsInRange(fromMs: Long, toMs: Long): List<TransactionEntity>
+
+    @Query("SELECT smsId FROM transactions WHERE occurredAt >= :fromMs")
+    suspend fun listSmsIdsSince(fromMs: Long): List<Long>
+
+    @Query("SELECT DISTINCT category FROM transactions")
+    suspend fun listDistinctCategories(): List<String>
+
+    /** Rows whose dedupKey is shared with another row (duplicate collapse in repair). */
+    @Query(
+        """
+        SELECT * FROM transactions
+        WHERE dedupKey != '' AND dedupKey IN (
+            SELECT dedupKey FROM transactions WHERE dedupKey != ''
+            GROUP BY dedupKey HAVING COUNT(*) > 1
+        )
+        """,
+    )
+    suspend fun listRowsWithSharedDedupKey(): List<TransactionEntity>
+
+    /** Just what own-account detection needs, without loading every full row. */
+    @Query("SELECT sender, bodySnippet, type FROM transactions")
+    suspend fun listAccountEvidence(): List<AccountEvidence>
+
+    @Query("SELECT * FROM transactions WHERE smsId = :smsId LIMIT 1")
+    suspend fun getBySmsId(smsId: Long): TransactionEntity?
+
     @Query("SELECT * FROM transactions WHERE id > :afterId ORDER BY id ASC")
     suspend fun listAfterId(afterId: Long): List<TransactionEntity>
 
@@ -213,6 +248,13 @@ interface TransactionDao {
         expectedCategory: String,
     ): Int
 }
+
+/** Projection for own-account detection. */
+data class AccountEvidence(
+    val sender: String,
+    val bodySnippet: String,
+    val type: String,
+)
 
 @Dao
 interface MerchantMemoryDao {

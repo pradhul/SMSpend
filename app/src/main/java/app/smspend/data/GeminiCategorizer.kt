@@ -11,6 +11,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import app.smspend.util.runCatchingCancellable
 
 sealed class GeminiKeyCheck {
     data object Ok : GeminiKeyCheck()
@@ -583,11 +584,11 @@ class GeminiCategorizer(
         val body = payload.toString().toRequestBody("application/json".toMediaType())
         val url =
             "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
-        return runCatching {
+        return runCatchingCancellable {
             client.newCall(Request.Builder().url(url).post(body).build()).execute().use { response ->
                 val raw = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    val apiMsg = runCatching {
+                    val apiMsg = runCatchingCancellable {
                         JSONObject(raw).optJSONObject("error")?.optString("message")
                     }.getOrNull()?.takeIf { it.isNotBlank() }
                     val failure = GeminiResult.Failure(
@@ -1110,22 +1111,22 @@ class GeminiCategorizer(
 
     private fun parseJsonObject(raw: String): JSONObject? {
         val cleaned = stripMarkdown(raw)
-        runCatching { JSONObject(cleaned) }.getOrNull()?.let { return it }
+        runCatchingCancellable { JSONObject(cleaned) }.getOrNull()?.let { return it }
         val start = cleaned.indexOf('{')
         val end = cleaned.lastIndexOf('}')
         if (start >= 0 && end > start) {
-            return runCatching { JSONObject(cleaned.substring(start, end + 1)) }.getOrNull()
+            return runCatchingCancellable { JSONObject(cleaned.substring(start, end + 1)) }.getOrNull()
         }
         return null
     }
 
     private fun parseJsonArray(raw: String): JSONArray? {
         val cleaned = stripMarkdown(raw)
-        runCatching { JSONArray(cleaned) }.getOrNull()?.let { return it }
+        runCatchingCancellable { JSONArray(cleaned) }.getOrNull()?.let { return it }
         val start = cleaned.indexOf('[')
         val end = cleaned.lastIndexOf(']')
         if (start >= 0 && end > start) {
-            return runCatching { JSONArray(cleaned.substring(start, end + 1)) }.getOrNull()
+            return runCatchingCancellable { JSONArray(cleaned.substring(start, end + 1)) }.getOrNull()
         }
         return null
     }

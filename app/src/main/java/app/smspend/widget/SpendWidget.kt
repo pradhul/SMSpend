@@ -37,14 +37,15 @@ import app.smspend.util.paiseToCompactRupees
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import app.smspend.util.runCatchingCancellable
 
 class SpendWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val app = context.smSpend
         val snap = withContext(Dispatchers.IO) {
-            runCatching { app.repository.widgetSnapshot() }.getOrNull()
+            runCatchingCancellable { app.repository.widgetSnapshot() }.getOrNull()
         }
-        val themeMode = runCatching { ThemeMode.fromStored(app.prefs.themeMode.first()) }
+        val themeMode = runCatchingCancellable { ThemeMode.fromStored(app.prefs.themeMode.first()) }
             .getOrDefault(ThemeMode.SYSTEM)
         provideContent {
             GlanceTheme {

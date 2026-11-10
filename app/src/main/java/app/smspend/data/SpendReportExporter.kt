@@ -13,6 +13,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import app.smspend.util.runCatchingCancellable
 
 /**
  * Writes the month spend report as a CSV to Downloads. CSV opens directly in
@@ -50,7 +51,7 @@ class SpendReportExporter(private val context: Context) {
         val monthStamp = SimpleDateFormat("yyyyMM", Locale.US).format(Date(report.month.startMs))
         val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
         val fileName = "smspend-report-$monthStamp-$stamp.csv"
-        val written = runCatching {
+        val written = runCatchingCancellable {
             writeToDownloads(fileName, sb.toString().toByteArray(Charsets.UTF_8))
         }.getOrElse { e ->
             return@withContext OtherExportResult(

@@ -17,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.Calendar
+import app.smspend.util.runCatchingCancellable
 
 class SmSpendApp : Application() {
     lateinit var prefs: UserPreferences
@@ -43,7 +44,7 @@ class SmSpendApp : Application() {
         appScope.launch {
             // Parser logic changed: re-check previously imported transactions once.
             if (prefs.parserVersion.first() < SmsDebitParser.VERSION) {
-                runCatching {
+                runCatchingCancellable {
                     repository.repairTransactions()
                     // Repair only re-reads stored rows; templates the old parser skipped need a rescan.
                     if (hasSmsPermission()) {
@@ -52,10 +53,10 @@ class SmSpendApp : Application() {
                 }
                     .onSuccess {
                         prefs.setParserVersion(SmsDebitParser.VERSION)
-                        runCatching { SpendWidgetUpdater.update(this@SmSpendApp) }
+                        runCatchingCancellable { SpendWidgetUpdater.update(this@SmSpendApp) }
                     }
             }
-            runCatching { repository.refreshRecurringMerchants() }
+            runCatchingCancellable { repository.refreshRecurringMerchants() }
         }
     }
 

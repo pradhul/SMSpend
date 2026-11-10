@@ -161,6 +161,7 @@ import kotlin.math.roundToInt
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.layout.heightIn
 import java.util.concurrent.TimeUnit
+import app.smspend.util.runCatchingCancellable
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalSharedTransitionApi::class)
 @Composable
@@ -1460,8 +1461,8 @@ fun CategoryScreen(
     val accent = CategoryColors.forKey(bucket.key)
     val headerIcon = CategoryIcons.forKey(bucket.key, iconName)
     LaunchedEffect(Unit) {
-        customCategoryKeys = runCatching { repo.listCustomCategoryKeys() }.getOrDefault(emptyList())
-        recentTags = runCatching { repo.recentTags() }.getOrDefault(emptyList())
+        customCategoryKeys = runCatchingCancellable { repo.listCustomCategoryKeys() }.getOrDefault(emptyList())
+        recentTags = runCatchingCancellable { repo.recentTags() }.getOrDefault(emptyList())
     }
 
     Column(
@@ -1643,13 +1644,13 @@ fun CategoryScreen(
                     repo.retag(tx.id, categoryKey, applyAll)
                     retagLaunch = null
                     customCategoryKeys =
-                        runCatching { repo.listCustomCategoryKeys() }.getOrDefault(customCategoryKeys)
+                        runCatchingCancellable { repo.listCustomCategoryKeys() }.getOrDefault(customCategoryKeys)
                 }
             },
             onSaveTag = { tag ->
                 scope.launch {
                     repo.setTransactionNote(tx.id, tag)
-                    recentTags = runCatching { repo.recentTags() }.getOrDefault(recentTags)
+                    recentTags = runCatchingCancellable { repo.recentTags() }.getOrDefault(recentTags)
                     retagLaunch = null
                 }
             },
@@ -3352,8 +3353,8 @@ fun SearchScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     LaunchedEffect(Unit) {
-        customCategoryKeys = runCatching { repo.listCustomCategoryKeys() }.getOrDefault(emptyList())
-        recentTags = runCatching { repo.recentTags() }.getOrDefault(emptyList())
+        customCategoryKeys = runCatchingCancellable { repo.listCustomCategoryKeys() }.getOrDefault(emptyList())
+        recentTags = runCatchingCancellable { repo.recentTags() }.getOrDefault(emptyList())
     }
 
     Column(
@@ -3426,13 +3427,13 @@ fun SearchScreen(
                     repo.retag(tx.id, categoryKey, applyAll)
                     retagLaunch = null
                     customCategoryKeys =
-                        runCatching { repo.listCustomCategoryKeys() }.getOrDefault(customCategoryKeys)
+                        runCatchingCancellable { repo.listCustomCategoryKeys() }.getOrDefault(customCategoryKeys)
                 }
             },
             onSaveTag = { tag ->
                 scope.launch {
                     repo.setTransactionNote(tx.id, tag)
-                    recentTags = runCatching { repo.recentTags() }.getOrDefault(recentTags)
+                    recentTags = runCatchingCancellable { repo.recentTags() }.getOrDefault(recentTags)
                     retagLaunch = null
                 }
             },

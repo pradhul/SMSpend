@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import app.smspend.util.runCatchingCancellable
 
 /** Pager within Months: index 0 = pick-a-month, 1..N = home months (oldest → this month). */
 const val HOME_PICKER_PAGE = 0
@@ -305,7 +306,7 @@ class HomeViewModel(
         viewModelScope.launch {
             categoriesByPageFlow.collect { byPage ->
                 val keys = byPage.values.flatten().map { it.bucket.key }.distinct()
-                runCatching { repo.ensureIconsForCategories(keys) }
+                runCatchingCancellable { repo.ensureIconsForCategories(keys) }
             }
         }
         viewModelScope.launch {
@@ -394,12 +395,12 @@ class HomeViewModel(
                     // Fire-and-forget so the spinner isn't held on Gemini latency;
                     // rows update live via Room flows when categories land.
                     viewModelScope.launch {
-                        runCatching { repo.runAiTriagePass() }
-                        runCatching { repo.runAiCategorizationPass() }
-                        runCatching { SpendWidgetUpdater.update(appContext) }
+                        runCatchingCancellable { repo.runAiTriagePass(incremental = !userInitiated) }
+                        runCatchingCancellable { repo.runAiCategorizationPass() }
+                        runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
                     }
-                    runCatching { repo.refreshRecurringMerchants() }
-                    runCatching { SpendWidgetUpdater.update(appContext) }
+                    runCatchingCancellable { repo.refreshRecurringMerchants() }
+                    runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
                     maybePromptMyBanks()
                 }
                 lastQuietScanAtMs = System.currentTimeMillis()
@@ -422,7 +423,7 @@ class HomeViewModel(
             }
             upcomingExplainLoading.value = true
             upcomingExplain.value = null
-            runCatching { repo.explainUpcomingSpends(items) }
+            runCatchingCancellable { repo.explainUpcomingSpends(items) }
                 .onSuccess { upcomingExplain.value = it }
                 .onFailure { upcomingExplain.value = it.message ?: "Could not explain upcoming spends" }
             upcomingExplainLoading.value = false
@@ -447,8 +448,8 @@ class HomeViewModel(
                         }
                     }
                     refreshSyncLabel()
-                    runCatching { repo.refreshRecurringMerchants() }
-                    runCatching { SpendWidgetUpdater.update(appContext) }
+                    runCatchingCancellable { repo.refreshRecurringMerchants() }
+                    runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
                     if (result.duplicatePairs.isNotEmpty()) {
                         duplicateReview.value = DuplicateReviewState(result.duplicatePairs)
                     }
@@ -490,7 +491,7 @@ class HomeViewModel(
         viewModelScope.launch {
             repo.markAsDuplicate(pair.laterId, pair.earlierId)
             message.value = "Muted duplicate — excluded from totals"
-            runCatching { SpendWidgetUpdater.update(appContext) }
+            runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
         }
     }
 
@@ -503,7 +504,7 @@ class HomeViewModel(
             duplicateReview.value = if (remaining.isEmpty()) null else DuplicateReviewState(remaining)
             if (removed > 0) {
                 message.value = "Removed $removed duplicate"
-                runCatching { SpendWidgetUpdater.update(appContext) }
+                runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
             }
             scanning.value = false
         }
@@ -521,7 +522,7 @@ class HomeViewModel(
             prefs.setMyBanksConfigured(true)
             showMyBanks.value = false
             message.value = "Banks saved"
-            runCatching { repo.onMyBanksSaved() }
+            runCatchingCancellable { repo.onMyBanksSaved() }
         }
     }
 
@@ -546,7 +547,7 @@ class HomeViewModel(
 
     private suspend fun maybePromptMyBanks() {
         if (prefs.myBanksConfigured.first()) return
-        val detected = runCatching { repo.detectMyBanksFromInbox() }.getOrDefault(emptySet())
+        val detected = runCatchingCancellable { repo.detectMyBanksFromInbox() }.getOrDefault(emptySet())
         detectedBankIds.value = detected
         if (selectedBankIds.value.isEmpty()) {
             selectedBankIds.value = detected
@@ -608,9 +609,9 @@ class CategoryViewModel(
 
     init {
         viewModelScope.launch {
-            runCatching { repo.ensureCustomCategoryIcon(categoryKey) }
+            runCatchingCancellable { repo.ensureCustomCategoryIcon(categoryKey) }
             _monthTotals.value =
-                runCatching { repo.categoryMonthTotalsYtd(categoryKey) }.getOrDefault(emptyList())
+                runCatchingCancellable { repo.categoryMonthTotalsYtd(categoryKey) }.getOrDefault(emptyList())
         }
     }
 
@@ -664,12 +665,12 @@ class TrendsViewModel(
      */
     fun onScreenVisible() {
         viewModelScope.launch {
-            val snap = runCatching { repo.monthlySpendTrend() }.getOrNull() ?: return@launch
+            val snap = runCatchingCancellable { repo.monthlySpendTrend() }.getOrNull() ?: return@launch
             _monthly.value = snap
             val keys = snap.ranks.map { it.bucket.key }
-            runCatching { repo.ensureIconsForCategories(keys) }
+            runCatchingCancellable { repo.ensureIconsForCategories(keys) }
             if (_summary.value == null && snap.ranks.isNotEmpty() &&
-                runCatching { repo.hasGeminiKey() }.getOrDefault(false)
+                runCatchingCancellable { repo.hasGeminiKey() }.getOrDefault(false)
             ) {
                 loadSummary()
             }
@@ -684,7 +685,7 @@ class TrendsViewModel(
         if (_summaryLoading.value) return
         _summaryLoading.value = true
         _summaryError.value = null
-        runCatching { repo.trendsSummaryBullets() }
+        runCatchingCancellable { repo.trendsSummaryBullets() }
             .onSuccess { _summary.value = it }
             .onFailure { _summaryError.value = it.message ?: "Could not summarize trends" }
         _summaryLoading.value = false
@@ -718,7 +719,7 @@ class ExportsViewModel(
     /** Reloads the report in place so a return visit doesn't flash "Loading…". */
     fun onScreenVisible() {
         viewModelScope.launch {
-            val report = runCatching { repo.monthSpendReport() }.getOrNull() ?: return@launch
+            val report = runCatchingCancellable { repo.monthSpendReport() }.getOrNull() ?: return@launch
             _state.value = _state.value.copy(report = report)
         }
     }
@@ -729,7 +730,7 @@ class ExportsViewModel(
         if (rows.isEmpty() || _state.value.notesLoading) return
         viewModelScope.launch {
             _state.value = _state.value.copy(notesLoading = true, message = null)
-            runCatching { repo.annotateReportDates(rows) }
+            runCatchingCancellable { repo.annotateReportDates(rows) }
                 .onSuccess { notes ->
                     _state.value = _state.value.copy(
                         dateNotes = notes,
@@ -897,8 +898,8 @@ class SettingsViewModel(
                     message.value = "Key saved · Gemini OK"
                     // Categorize rows skipped while the app ran without a key.
                     viewModelScope.launch {
-                        runCatching { repo.retrySkippedWithAi() }
-                        runCatching { SpendWidgetUpdater.update(appContext) }
+                        runCatchingCancellable { repo.retrySkippedWithAi() }
+                        runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
                     }
                 }
                 is GeminiKeyCheck.Failed -> {
@@ -937,8 +938,8 @@ class SettingsViewModel(
             messageIsError.value = false
             message.value = if (enabled) "AI will check SMS the rules miss" else "AI SMS check off"
             if (enabled) {
-                runCatching { repo.runAiTriagePass() }
-                runCatching { repo.runAiCategorizationPass() }
+                runCatchingCancellable { repo.runAiTriagePass() }
+                runCatchingCancellable { repo.runAiCategorizationPass() }
             }
         }
     }
@@ -954,7 +955,7 @@ class SettingsViewModel(
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch {
             prefs.setThemeMode(mode.storageKey)
-            runCatching { SpendWidgetUpdater.update(appContext) }
+            runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
         }
     }
 
@@ -973,7 +974,7 @@ class SettingsViewModel(
     fun openMyBanksEditor() {
         viewModelScope.launch {
             val saved = app.smspend.domain.IndianBanks.parseIdsCsv(prefs.myBankIds.first())
-            val detected = runCatching { repo.detectMyBanksFromInbox() }.getOrDefault(emptySet())
+            val detected = runCatchingCancellable { repo.detectMyBanksFromInbox() }.getOrDefault(emptySet())
             detectedBankIds.value = detected
             editingBankIds.value = saved.ifEmpty { detected }
             showMyBanks.value = true
@@ -993,7 +994,7 @@ class SettingsViewModel(
             showMyBanks.value = false
             messageIsError.value = false
             message.value = "Banks saved"
-            runCatching { repo.onMyBanksSaved() }
+            runCatchingCancellable { repo.onMyBanksSaved() }
         }
     }
 
@@ -1005,7 +1006,7 @@ class SettingsViewModel(
         viewModelScope.launch {
             busy.value = true
             messageIsError.value = false
-            runCatching {
+            runCatchingCancellable {
                 repo.scanInbox(
                     forceFullMonth = true,
                     sinceOverrideMs = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1),
@@ -1015,12 +1016,12 @@ class SettingsViewModel(
                     message.value = "Rescanned · ${it.newTransactions} new"
                     syncLabel.value = DateRanges.formatSyncTime(repo.lastSyncAt())
                     viewModelScope.launch {
-                        runCatching { repo.runAiTriagePass() }
-                        runCatching { repo.runAiCategorizationPass() }
-                        runCatching { SpendWidgetUpdater.update(appContext) }
+                        runCatchingCancellable { repo.runAiTriagePass() }
+                        runCatchingCancellable { repo.runAiCategorizationPass() }
+                        runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
                     }
-                    runCatching { repo.refreshRecurringMerchants() }
-                    runCatching { SpendWidgetUpdater.update(appContext) }
+                    runCatchingCancellable { repo.refreshRecurringMerchants() }
+                    runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
                 }
                 .onFailure {
                     messageIsError.value = true
@@ -1042,7 +1043,7 @@ class SettingsViewModel(
         viewModelScope.launch {
             busy.value = true
             messageIsError.value = false
-            runCatching { repo.repairTransactions() }
+            runCatchingCancellable { repo.repairTransactions() }
                 .onSuccess { result ->
                     message.value = when {
                         result.removed == 0 && result.fixed == 0 ->
@@ -1052,7 +1053,7 @@ class SettingsViewModel(
                         else ->
                             "Removed ${result.removed} wrong entries · fixed ${result.fixed} amounts"
                     }
-                    runCatching { SpendWidgetUpdater.update(appContext) }
+                    runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
                 }
                 .onFailure {
                     messageIsError.value = true
@@ -1066,7 +1067,7 @@ class SettingsViewModel(
         viewModelScope.launch {
             busy.value = true
             messageIsError.value = false
-            runCatching { repo.reBaselineWithAi() }
+            runCatchingCancellable { repo.reBaselineWithAi() }
                 .onSuccess { result ->
                     when {
                         result.pending == 0 -> {
@@ -1086,7 +1087,7 @@ class SettingsViewModel(
                             message.value = "Recategorized ${result.applied} with Gemini"
                         }
                     }
-                    runCatching { SpendWidgetUpdater.update(appContext) }
+                    runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
                 }
                 .onFailure {
                     messageIsError.value = true
@@ -1100,7 +1101,7 @@ class SettingsViewModel(
         viewModelScope.launch {
             busy.value = true
             messageIsError.value = false
-            runCatching { repo.flagPossibleDuplicatesWithGemini() }
+            runCatchingCancellable { repo.flagPossibleDuplicatesWithGemini() }
                 .onSuccess { result ->
                     when {
                         result.error != null && result.flagged == 0 -> {
@@ -1133,7 +1134,7 @@ class SettingsViewModel(
                 db = SmSpendDatabase.get(appContext),
                 smsReader = SmsInboxReader(appContext),
             )
-            runCatching { exporter.export(allCategories = all) }
+            runCatchingCancellable { exporter.export(allCategories = all) }
                 .onSuccess { result ->
                     val what = if (all) "inbox SMS" else "Other SMS"
                     when {
@@ -1162,7 +1163,7 @@ class SettingsViewModel(
         viewModelScope.launch {
             busy.value = true
             messageIsError.value = false
-            runCatching { DiagLog.exportToDownloads(appContext) }
+            runCatchingCancellable { DiagLog.exportToDownloads(appContext) }
                 .onSuccess { result ->
                     when {
                         result.error != null -> {
@@ -1191,7 +1192,7 @@ class SettingsViewModel(
         viewModelScope.launch {
             busy.value = true
             messageIsError.value = false
-            runCatching { DiagLog.clear() }
+            runCatchingCancellable { DiagLog.clear() }
                 .onSuccess {
                     message.value = "Categorization log cleared"
                     refreshLogSize()
@@ -1251,7 +1252,7 @@ class OnboardingViewModel(
             if (apiKey.isNotBlank()) prefs.setGeminiApiKey(apiKey)
             prefs.setOnboarded(true)
             prefs.setAutoScanEnabled(true)
-            runCatching {
+            runCatchingCancellable {
                 repo.scanInbox(
                     forceFullMonth = true,
                     sinceOverrideMs = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1),
@@ -1260,7 +1261,7 @@ class OnboardingViewModel(
             // First-run backfill: categorize the scanned history in a few batched calls
             // while the user is still on the onboarding screen. Also revives rows
             // SKIPPED by an earlier key-less run if the user re-onboards with a key.
-            runCatching { repo.retrySkippedWithAi() }
+            runCatchingCancellable { repo.retrySkippedWithAi() }
             onDone()
         }
     }

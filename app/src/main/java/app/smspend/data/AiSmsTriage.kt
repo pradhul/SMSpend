@@ -4,6 +4,7 @@ import app.smspend.domain.IndianBanks
 import java.util.Locale
 import java.util.regex.Pattern
 import java.util.regex.PatternSyntaxException
+import app.smspend.util.runCatchingCancellable
 
 /** Amount (and optional payee) pulled from an SMS by a learned per-sender template. */
 data class TemplateMatch(
@@ -102,11 +103,11 @@ object AiSmsTriage {
         val compiled = compile(pattern) ?: return null
         val m = compiled.matcher(body.replace('\n', ' '))
         if (!m.find()) return null
-        val raw = runCatching { m.group("amount") }.getOrNull() ?: return null
+        val raw = runCatchingCancellable { m.group("amount") }.getOrNull() ?: return null
         val rupees = raw.replace(",", "").trim().toDoubleOrNull() ?: return null
         val paise = Math.round(rupees * 100.0)
         if (paise <= 0) return null
-        val payee = runCatching { m.group("payee") }.getOrNull()
+        val payee = runCatchingCancellable { m.group("payee") }.getOrNull()
             ?.trim()
             ?.trimEnd('.', ',', ';', ' ')
             ?.trim()

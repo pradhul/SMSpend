@@ -72,6 +72,7 @@ import app.smspend.ui.theme.Paper
 import app.smspend.ui.theme.SmSpendTheme
 import app.smspend.ui.theme.ThemeMode
 import app.smspend.util.DateRanges
+import app.smspend.util.runCatchingCancellable
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -178,7 +179,7 @@ class MainActivity : FragmentActivity() {
             Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
             Uri.fromParts("package", packageName, null),
         ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { startActivity(intent) }
+        runCatchingCancellable { startActivity(intent) }
     }
 }
 
