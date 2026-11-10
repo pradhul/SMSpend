@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -91,10 +92,23 @@ class MainActivity : FragmentActivity() {
                     controller.isAppearanceLightStatusBars = !isDark
                     controller.isAppearanceLightNavigationBars = !isDark
                 }
-                val onboarded by app.prefs.onboarded.collectAsStateWithLifecycle(initialValue = false)
-                val biometricEnabled by app.prefs.biometricLockEnabled.collectAsStateWithLifecycle(
-                    initialValue = false,
+                // null until DataStore has answered: rendering with a guessed `false` used to
+                // flash onboarding, or the unlocked app before the lock kicked in.
+                val onboardedPref by app.prefs.onboarded.collectAsStateWithLifecycle(initialValue = null)
+                val biometricPref by app.prefs.biometricLockEnabled.collectAsStateWithLifecycle(
+                    initialValue = null,
                 )
+                val prefsLoaded = onboardedPref != null && biometricPref != null
+                val onboarded = onboardedPref == true
+                val biometricEnabled = biometricPref == true
+                LaunchedEffect(biometricEnabled) {
+                    // Keep amounts out of screenshots, screen recording and the recents thumbnail.
+                    if (biometricEnabled) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    }
+                }
                 var permissionTick by remember { mutableIntStateOf(0) }
                 val context = LocalContext.current
                 // Permissions can be revoked from system Settings while the app is in the
@@ -149,6 +163,7 @@ class MainActivity : FragmentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     containerColor = Paper,
                 ) { padding ->
+                    if (!prefsLoaded) return@Scaffold
                     BiometricGate(enabled = biometricEnabled && onboarded) {
                         Column(modifier = Modifier.padding(padding)) {
                             if (onboarded && !hasSms) {

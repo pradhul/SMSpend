@@ -4,4 +4,6 @@
     <string name="widget_label">Today &amp; month spend</string>
     <string name="widget_description">Today and this month\'s spending at a glance</string>
     <string name="upi_listener_label">SMSpend UPI capture</string>
+    <string name="widget_locked_title">SMSpend</string>
+    <string name="widget_locked_body">App lock is on. Tap to open.</string>
 </resources>

@@ -27,7 +27,9 @@ import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
+import androidx.glance.LocalContext
 import app.smspend.MainActivity
+import app.smspend.R
 import app.smspend.smSpend
 import app.smspend.ui.theme.DarkColors
 import app.smspend.ui.theme.LightColors
@@ -47,9 +49,12 @@ class SpendWidget : GlanceAppWidget() {
         }
         val themeMode = runCatchingCancellable { ThemeMode.fromStored(app.prefs.themeMode.first()) }
             .getOrDefault(ThemeMode.SYSTEM)
+        // With app lock on, amounts stay out of the home screen (and its screenshots).
+        val locked = runCatchingCancellable { app.prefs.biometricLockEnabled.first() }.getOrDefault(true)
         provideContent {
             GlanceTheme {
-                WidgetContent(snap, WidgetPalette.forMode(themeMode))
+                val palette = WidgetPalette.forMode(themeMode)
+                if (locked) LockedWidgetContent(palette) else WidgetContent(snap, palette)
             }
         }
     }
@@ -71,6 +76,28 @@ private class WidgetPalette(light: SmSpendColors, dark: SmSpendColors) {
             ThemeMode.LIGHT -> WidgetPalette(LightColors, LightColors)
             ThemeMode.DARK -> WidgetPalette(DarkColors, DarkColors)
         }
+    }
+}
+
+@Composable
+private fun LockedWidgetContent(palette: WidgetPalette) {
+    Column(
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .background(palette.paper)
+            .padding(14.dp)
+            .clickable(actionStartActivity<MainActivity>()),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            LocalContext.current.getString(R.string.widget_locked_title),
+            style = TextStyle(color = palette.ink, fontSize = 16.sp, fontWeight = FontWeight.Bold),
+        )
+        Spacer(GlanceModifier.height(4.dp))
+        Text(
+            LocalContext.current.getString(R.string.widget_locked_body),
+            style = TextStyle(color = palette.mute, fontSize = 12.sp),
+        )
     }
 }
 

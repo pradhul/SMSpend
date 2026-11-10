@@ -947,6 +947,8 @@ class SettingsViewModel(
     fun setBiometricLockEnabled(enabled: Boolean) {
         viewModelScope.launch {
             prefs.setBiometricLockEnabled(enabled)
+            // The widget hides amounts while the lock is on.
+            runCatchingCancellable { SpendWidgetUpdater.update(appContext) }
             messageIsError.value = false
             message.value = if (enabled) "App lock on" else "App lock off"
         }
