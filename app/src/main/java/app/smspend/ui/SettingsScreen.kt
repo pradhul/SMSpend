@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.selectable
 import android.Manifest
 import android.content.Intent
 import android.os.Build
@@ -134,7 +136,7 @@ fun SettingsScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Ink)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
             }
             Text("Settings", style = MaterialTheme.typography.titleLarge, color = Ink)
         }
@@ -478,7 +480,7 @@ internal fun ThemeModePicker(
                     .clip(RoundedCornerShape(12.dp))
                     .background(if (isSelected) Ink else Paper)
                     .border(1.dp, if (isSelected) Ink else Line, RoundedCornerShape(12.dp))
-                    .clickable { onSelect(mode) }
+                    .selectable(selected = isSelected, role = Role.RadioButton) { onSelect(mode) }
                     .padding(vertical = 10.dp),
                 color = if (isSelected) Mint else Mute,
                 style = MaterialTheme.typography.labelLarge,

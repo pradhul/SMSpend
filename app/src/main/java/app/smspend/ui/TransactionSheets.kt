@@ -1,5 +1,8 @@
 package app.smspend.ui
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
@@ -217,7 +220,7 @@ fun TransactionDetailSheet(
                                 .clip(RoundedCornerShape(10.dp))
                                 .border(1.dp, if (selectedTag) Ink else Line, RoundedCornerShape(10.dp))
                                 .background(if (selectedTag) Mint.copy(alpha = 0.35f) else Paper)
-                                .clickable {
+                                .toggleable(value = selectedTag, role = Role.Checkbox) {
                                     val next = if (selectedTag) {
                                         draftTagList.filterNot {
                                             TransactionEntity.normalizeUserTag(it) == norm
@@ -891,7 +894,7 @@ fun RetagSheet(
                                         .clip(RoundedCornerShape(12.dp))
                                         .border(1.dp, if (selectedChip) Ink else Line, RoundedCornerShape(12.dp))
                                         .background(if (selectedChip) Mint.copy(alpha = 0.35f) else PaperRaised)
-                                        .clickable {
+                                        .selectable(selected = selectedChip, role = Role.RadioButton) {
                                             selected = cat
                                             selectedCustomKey = null
                                             customText = ""
@@ -925,7 +928,7 @@ fun RetagSheet(
                                             .clip(RoundedCornerShape(12.dp))
                                             .border(1.dp, if (selectedChip) Ink else Line, RoundedCornerShape(12.dp))
                                             .background(if (selectedChip) Mint.copy(alpha = 0.35f) else PaperRaised)
-                                            .clickable {
+                                            .selectable(selected = selectedChip, role = Role.RadioButton) {
                                                 selected = null
                                                 selectedCustomKey = key
                                                 customText = ""
@@ -1112,7 +1115,7 @@ fun RetagSheet(
                                     .clip(RoundedCornerShape(10.dp))
                                     .border(1.dp, if (selectedTag) Ink else Line, RoundedCornerShape(10.dp))
                                     .background(if (selectedTag) Mint.copy(alpha = 0.35f) else Paper)
-                                    .clickable {
+                                    .toggleable(value = selectedTag, role = Role.Checkbox) {
                                         draftTags = if (selectedTag) {
                                             draftTags.filterNot {
                                                 TransactionEntity.normalizeUserTag(it) == norm

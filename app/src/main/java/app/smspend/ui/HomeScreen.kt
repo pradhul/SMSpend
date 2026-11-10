@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.selectable
 import android.provider.Settings
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.AnimatedVisibility
@@ -219,7 +221,7 @@ fun HomeScreen(
                         .clip(RoundedCornerShape(12.dp))
                         .background(if (selected) Ink else PaperRaised)
                         .border(1.dp, if (selected) Ink else Line, RoundedCornerShape(12.dp))
-                        .clickable { viewModel.selectSegment(seg) }
+                        .selectable(selected = selected, role = Role.Tab) { viewModel.selectSegment(seg) }
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                     color = if (selected) Mint else Mute,
                     style = MaterialTheme.typography.labelLarge,
