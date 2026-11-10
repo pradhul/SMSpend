@@ -22,7 +22,9 @@ import app.smspend.data.TrendsBullet
 import app.smspend.domain.RecurringDetector
 import app.smspend.domain.SpendCategory
 import app.smspend.ui.theme.ThemeMode
+import app.smspend.data.RangeSummary
 import app.smspend.util.DateRanges
+import app.smspend.util.DayTicker
 import app.smspend.util.MonthWindow
 import app.smspend.widget.SpendWidgetUpdater
 import app.smspend.work.SmsScanWorker
@@ -36,7 +38,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -100,8 +104,14 @@ class HomeViewModel(
     private val message = MutableStateFlow<String?>(null)
     private val lastSyncLabel = MutableStateFlow("—")
     private val segment = MutableStateFlow(HomeSegment.TODAY)
-    private val months = DateRanges.homeMonths()
-    private val pageCount = months.size + 1 // picker + months
+    /** Start of the current local day; ticks at midnight and on clock / time-zone changes. */
+    private val today: StateFlow<Long> = DayTicker.days(appContext)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, DateRanges.startOfTodayMs())
+    private val monthsFlow: StateFlow<List<MonthWindow>> = today
+        .map { DateRanges.homeMonths(it) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, DateRanges.homeMonths())
+    private val months: List<MonthWindow> get() = monthsFlow.value
+    private val pageCount = DateRanges.HOME_MONTH_COUNT + 1 // picker + months
     private val thisMonthPage = pageCount - 1
     private val selectedPageIndex = MutableStateFlow(thisMonthPage)
     private val warmCenterIndex = MutableStateFlow(thisMonthPage)
@@ -115,71 +125,59 @@ class HomeViewModel(
     private val scanGate = Mutex()
     private var lastQuietScanAtMs = 0L
 
-    private val categoriesByPageFlow = combine(warmCenterIndex, customMonth, segment) { center, custom, seg ->
-        Triple(center, custom, seg)
-    }.flatMapLatest { (center, custom, seg) ->
-        when (seg) {
-            HomeSegment.TODAY -> {
-                val (start, end) = DateRanges.todayWindow()
-                repo.observeRangeByCategory(start, end).map { cats ->
-                    mapOf(-1 to cats)
+    /**
+     * One Room observation per visible period; spends and notices are both derived
+     * from the same netting pass (computed off the main thread in the repository).
+     * Windows end at the period end, not "now", so new transactions show up live;
+     * [today] restarts them when the day (and so the week / month) rolls over.
+     */
+    private val summariesByPageFlow: Flow<Map<Int, RangeSummary>> =
+        combine(warmCenterIndex, customMonth, segment, monthsFlow) { center, custom, seg, monthList ->
+            PageQuery(center, custom, seg, monthList, today.value)
+        }.flatMapLatest { q ->
+            when (q.segment) {
+                HomeSegment.TODAY -> {
+                    val (start, end) = DateRanges.todayWindow(q.day)
+                    repo.observeRangeSummary(start, end).map { mapOf(-1 to it) }
+                }
+                HomeSegment.THIS_WEEK -> {
+                    val week = DateRanges.weekWindow(0, q.day)
+                    repo.observeRangeSummary(week.startMs, week.endExclusiveMs).map { mapOf(-1 to it) }
+                }
+                HomeSegment.MONTHS -> {
+                    val center = q.center
+                    val indices = buildSet {
+                        add(center)
+                        if (center > HOME_PICKER_PAGE) add(center - 1)
+                        if (center < pageCount - 1) add(center + 1)
+                        add(thisMonthPage)
+                        if (thisMonthPage > HOME_PICKER_PAGE + 1) add(thisMonthPage - 1)
+                    }.toList()
+                    val flows = indices.map { index ->
+                        val range = monthForPage(index, q.custom, q.months)
+                            ?: return@map flowOf(index to RangeSummary.EMPTY)
+                        repo.observeRangeSummary(range.startMs, range.endExclusiveMs)
+                            .map { summary -> index to summary }
+                    }
+                    if (flows.isEmpty()) flowOf(emptyMap())
+                    else combine(flows) { pairs -> pairs.toMap() }
                 }
             }
-            HomeSegment.THIS_WEEK -> {
-                val week = DateRanges.weekWindow(0)
-                repo.observeRangeByCategory(week.startMs, week.endExclusiveMs).map { cats ->
-                    mapOf(-1 to cats)
-                }
-            }
-            HomeSegment.MONTHS -> {
-                val indices = buildSet {
-                    add(center)
-                    if (center > HOME_PICKER_PAGE) add(center - 1)
-                    if (center < pageCount - 1) add(center + 1)
-                    add(thisMonthPage)
-                    if (thisMonthPage > HOME_PICKER_PAGE + 1) add(thisMonthPage - 1)
-                }.toList()
-                val flows = indices.map { index ->
-                    val range = monthForPage(index, custom) ?: return@map flowOf(index to emptyList<CategorySpend>())
-                    repo.observeRangeByCategory(range.startMs, range.endExclusiveMs)
-                        .map { cats -> index to cats }
-                }
-                if (flows.isEmpty()) flowOf(emptyMap())
-                else combine(flows) { pairs -> pairs.toMap() }
-            }
-        }
-    }
+        }.shareIn(viewModelScope, SharingStarted.Eagerly, replay = 1)
 
-    private val noticesByPageFlow = combine(warmCenterIndex, customMonth, segment) { center, custom, seg ->
-        Triple(center, custom, seg)
-    }.flatMapLatest { (center, custom, seg) ->
-        when (seg) {
-            HomeSegment.TODAY -> {
-                val (start, end) = DateRanges.todayWindow()
-                repo.observeRangeNotices(start, end).map { mapOf(-1 to it) }
-            }
-            HomeSegment.THIS_WEEK -> {
-                val week = DateRanges.weekWindow(0)
-                repo.observeRangeNotices(week.startMs, week.endExclusiveMs).map { mapOf(-1 to it) }
-            }
-            HomeSegment.MONTHS -> {
-                val indices = buildSet {
-                    add(center)
-                    if (center > HOME_PICKER_PAGE) add(center - 1)
-                    if (center < pageCount - 1) add(center + 1)
-                    add(thisMonthPage)
-                    if (thisMonthPage > HOME_PICKER_PAGE + 1) add(thisMonthPage - 1)
-                }.toList()
-                val flows = indices.map { index ->
-                    val range = monthForPage(index, custom) ?: return@map flowOf(index to emptyList<String>())
-                    repo.observeRangeNotices(range.startMs, range.endExclusiveMs)
-                        .map { notices -> index to notices }
-                }
-                if (flows.isEmpty()) flowOf(emptyMap())
-                else combine(flows) { pairs -> pairs.toMap() }
-            }
-        }
-    }
+    private data class PageQuery(
+        val center: Int,
+        val custom: MonthWindow?,
+        val segment: HomeSegment,
+        val months: List<MonthWindow>,
+        val day: Long,
+    )
+
+    private val categoriesByPageFlow: Flow<Map<Int, List<CategorySpend>>> =
+        summariesByPageFlow.map { byPage -> byPage.mapValues { it.value.spends } }
+
+    private val noticesByPageFlow: Flow<Map<Int, List<String>>> =
+        summariesByPageFlow.map { byPage -> byPage.mapValues { it.value.notices } }
 
     private val iconNamesFlow = repo.observeCategoryIconNames()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
@@ -197,20 +195,21 @@ class HomeViewModel(
         combine(customMonth, segment, duplicateReview, showMyBanks, detectedBankIds) { custom, seg, dups, banks, detected ->
             Triple(custom, seg, Triple(dups, banks, detected))
         },
-        selectedBankIds,
+        combine(selectedBankIds, today) { banks, day -> banks to day },
         noticesByPageFlow,
-    ) { triple, extras, selectedBanks, noticesByPage ->
+    ) { triple, extras, banksAndDay, noticesByPage ->
+        val (selectedBanks, day) = banksAndDay
         val (index, byPage, rest) = triple
         val (scan, msg, sync) = rest
         val (custom, seg, bankRest) = extras
         val (dups, showBanks, detected) = bankRest
         val period = when (seg) {
             HomeSegment.TODAY -> {
-                val (s, e) = DateRanges.todayWindow()
-                PeriodSnap("Today", DateRanges.formatTodaySubtitle(), s, e, byPage[-1].orEmpty())
+                val (s, e) = DateRanges.todayWindow(day)
+                PeriodSnap("Today", DateRanges.formatTodaySubtitle(day), s, e, byPage[-1].orEmpty())
             }
             HomeSegment.THIS_WEEK -> {
-                val week = DateRanges.weekWindow(0)
+                val week = DateRanges.weekWindow(0, day)
                 PeriodSnap(week.title(), week.subtitle(), week.startMs, week.endExclusiveMs, byPage[-1].orEmpty())
             }
             HomeSegment.MONTHS -> {
@@ -242,7 +241,7 @@ class HomeViewModel(
         }
         HomeUiState(
             segment = seg,
-            months = months,
+            months = monthsFlow.value,
             selectedPageIndex = index,
             categoriesByPage = byPage,
             segmentCategories = cats,
@@ -259,7 +258,7 @@ class HomeViewModel(
             momPct = mom,
             priorMonthShortLabel = priorMonth?.shortLabel(),
             customMonth = custom,
-            pickerChoices = DateRanges.pickerMonths(),
+            pickerChoices = DateRanges.pickerMonths(now = maxOf(day, System.currentTimeMillis())),
             duplicateReview = dups,
             showMyBanks = showBanks,
             detectedBankIds = detected,
@@ -325,10 +324,14 @@ class HomeViewModel(
 
     fun pageCount(): Int = pageCount
 
-    fun monthForPage(page: Int, custom: MonthWindow? = customMonth.value): MonthWindow? {
+    fun monthForPage(
+        page: Int,
+        custom: MonthWindow? = customMonth.value,
+        monthList: List<MonthWindow> = months,
+    ): MonthWindow? {
         return when {
             page == HOME_PICKER_PAGE -> custom
-            page in 1 until pageCount -> months.getOrNull(page - 1)
+            page in 1 until pageCount -> monthList.getOrNull(page - 1)
             else -> null
         }
     }
@@ -433,7 +436,7 @@ class HomeViewModel(
                 message.value = null
                 val state = uiState.value
                 val start = if (state.periodStartMs > 0) state.periodStartMs else months.first().startMs
-                val end = if (state.periodEndMs > 0) state.periodEndMs else DateRanges.endExclusiveNow()
+                val end = if (state.periodEndMs > 0) state.periodEndMs else DateRanges.startOfTomorrowMs()
                 try {
                     val result = repo.syncPeriod(start, end)
                     message.value = buildString {

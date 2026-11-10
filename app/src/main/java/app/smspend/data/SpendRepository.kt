@@ -7,7 +7,9 @@ import app.smspend.domain.SpendCategory
 import app.smspend.util.DateRanges
 import app.smspend.util.InboxScanWindow
 import app.smspend.util.MonthWindow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -23,6 +25,16 @@ data class CategorySpend(
     val txnCount: Int,
     val merchants: List<String>,
 )
+
+/** One period's category spends and the notices shown under them. */
+data class RangeSummary(
+    val spends: List<CategorySpend>,
+    val notices: List<String>,
+) {
+    companion object {
+        val EMPTY = RangeSummary(emptyList(), emptyList())
+    }
+}
 
 data class ScanResult(
     val scannedSms: Int,
@@ -424,25 +436,34 @@ class SpendRepository(
         }
     }
 
+    /**
+     * Spends + notices for one period from a single netting pass. Mapping runs on
+     * [Dispatchers.Default] so large months don't jank the UI thread.
+     */
+    fun observeRangeSummary(
+        startMs: Long,
+        endMs: Long = DateRanges.OPEN_END_MS,
+    ): Flow<RangeSummary> =
+        txDao.observeInRange(startMs, endMs).map { list ->
+            val net = applyTagNetting(list) { normalizeCategoryKey(it) }
+            RangeSummary(
+                spends = net.spends,
+                notices = buildList {
+                    addAll(net.noticeLines)
+                    cardBillBalance(list)?.let { add(it.notice) }
+                },
+            )
+        }.flowOn(Dispatchers.Default)
+
     fun observeRangeByCategory(
         startMs: Long,
-        endMs: Long = DateRanges.endExclusiveNow(),
-    ): Flow<List<CategorySpend>> =
-        txDao.observeInRange(startMs, endMs).map { list ->
-            applyTagNetting(list) { normalizeCategoryKey(it) }.spends
-        }
+        endMs: Long = DateRanges.OPEN_END_MS,
+    ): Flow<List<CategorySpend>> = observeRangeSummary(startMs, endMs).map { it.spends }
 
     fun observeRangeNotices(
         startMs: Long,
-        endMs: Long = DateRanges.endExclusiveNow(),
-    ): Flow<List<String>> =
-        txDao.observeInRange(startMs, endMs).map { list ->
-            val net = applyTagNetting(list) { normalizeCategoryKey(it) }
-            buildList {
-                addAll(net.noticeLines)
-                cardBillBalance(list)?.let { add(it.notice) }
-            }
-        }
+        endMs: Long = DateRanges.OPEN_END_MS,
+    ): Flow<List<String>> = observeRangeSummary(startMs, endMs).map { it.notices }
 
     /** Netted total for a category in range (matches Home category cards). */
     fun observeCategoryNettedTotal(
@@ -452,7 +473,7 @@ class SpendRepository(
     ): Flow<Long> =
         txDao.observeInRange(startMs, endMs).map { list ->
             nettedCategoryTotal(list, categoryKey) { normalizeCategoryKey(it) }
-        }
+        }.flowOn(Dispatchers.Default)
 
     fun observeCategoryNettingNotice(
         categoryKey: String,
@@ -472,12 +493,12 @@ class SpendRepository(
             if (relevant.isEmpty()) null else relevant.joinToString(" · ") {
                 "₹${formatPaiseShort(it.appliedPaise)} credit tagged '${it.tag}' offset"
             }
-        }
+        }.flowOn(Dispatchers.Default)
 
     @Deprecated("Use observeRangeByCategory", ReplaceWith("observeRangeByCategory(weekStartMs, weekEndMs)"))
     fun observeWeekByCategory(
         weekStartMs: Long = DateRanges.startOfThisWeekMs(),
-        weekEndMs: Long = DateRanges.endExclusiveNow(),
+        weekEndMs: Long = DateRanges.OPEN_END_MS,
     ): Flow<List<CategorySpend>> = observeRangeByCategory(weekStartMs, weekEndMs)
 
     fun observeCategoryIconNames(): Flow<Map<String, String>> =
@@ -515,11 +536,11 @@ class SpendRepository(
     fun observeCategoryTxns(
         categoryKey: String,
         weekStartMs: Long = DateRanges.startOfThisWeekMs(),
-        weekEndMs: Long = DateRanges.endExclusiveNow(),
+        weekEndMs: Long = DateRanges.OPEN_END_MS,
     ): Flow<List<TransactionEntity>> =
         txDao.observeInRange(weekStartMs, weekEndMs).map { list ->
             list.filter { normalizeCategoryKey(it.category) == categoryKey }
-        }
+        }.flowOn(Dispatchers.Default)
 
     fun observeExpectedSoon(withinDays: Int = 7): Flow<List<RecurringMerchantEntity>> {
         val until = System.currentTimeMillis() + withinDays * 24L * 60 * 60 * 1000
