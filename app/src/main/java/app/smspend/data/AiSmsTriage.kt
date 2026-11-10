@@ -1,5 +1,6 @@
 package app.smspend.data
 
+import app.smspend.util.rupeesToPaise
 import app.smspend.domain.IndianBanks
 import java.util.Locale
 import java.util.regex.Pattern
@@ -91,8 +92,8 @@ object AiSmsTriage {
     fun amountAppearsIn(body: String, amountPaise: Long): Boolean {
         val m = anyAmountPattern.matcher(body)
         while (m.find()) {
-            val rupees = "${m.group(1).replace(",", "")}.${m.group(2) ?: "0"}".toDoubleOrNull() ?: continue
-            if (Math.round(rupees * 100.0) == amountPaise) return true
+            val paise = rupeesToPaise(m.group(1) + (m.group(2)?.let { ".$it" } ?: "")) ?: continue
+            if (paise == amountPaise) return true
         }
         return false
     }
@@ -106,9 +107,7 @@ object AiSmsTriage {
             amount to payee
         } ?: return null
         val raw = groups.first ?: return null
-        val rupees = raw.replace(",", "").trim().toDoubleOrNull() ?: return null
-        val paise = Math.round(rupees * 100.0)
-        if (paise <= 0) return null
+        val paise = rupeesToPaise(raw) ?: return null
         val payee = groups.second
             ?.trim()
             ?.trimEnd('.', ',', ';', ' ')

@@ -3,6 +3,7 @@ package app.smspend.data
 import java.util.Locale
 import java.util.regex.Pattern
 import kotlin.math.abs
+import app.smspend.util.rupeesToPaise
 
 data class ParsedDebit(
     val amountPaise: Long,
@@ -586,9 +587,7 @@ object SmsDebitParser {
         val text = body.replace('\n', ' ').trim()
         val m = amountDrFromPattern.matcher(text)
         if (!m.find()) return null
-        val rupees = m.group(1)?.replace(",", "")?.toDoubleOrNull() ?: return null
-        val amountPaise = Math.round(rupees * 100.0)
-        if (amountPaise <= 0) return null
+        val amountPaise = rupeesToPaise(m.group(1)) ?: return null
         val payee = crToPayeePattern.matcher(text).let { pm ->
             if (pm.find()) pm.group(1)?.trim()?.trimEnd('.', ',', ';', ' ')?.trim() else null
         }?.takeIf { it.length >= 2 && isAcceptableMerchant(it, text, 0) }
@@ -604,8 +603,7 @@ object SmsDebitParser {
     private fun bareDebitedAmount(text: String): Long? {
         val m = bareDebitedAmountPattern.matcher(text)
         if (!m.find()) return null
-        val rupees = m.group(1)?.replace(",", "")?.toDoubleOrNull() ?: return null
-        return Math.round(rupees * 100.0).takeIf { it > 0 }
+        return rupeesToPaise(m.group(1))
     }
 
     fun isNeftCreditedToPayee(body: String): Boolean =
@@ -616,9 +614,7 @@ object SmsDebitParser {
         val text = body.replace('\n', ' ').trim()
         val m = accountDrDebitPattern.matcher(text)
         if (!m.find()) return null
-        val rupees = m.group(1)?.replace(",", "")?.toDoubleOrNull() ?: return null
-        val amountPaise = Math.round(rupees * 100.0)
-        if (amountPaise <= 0) return null
+        val amountPaise = rupeesToPaise(m.group(1)) ?: return null
         val payee = accountDrPayeePattern.matcher(text).let { pm ->
             if (pm.find()) pm.group(1)?.trim()?.trimEnd('.', ',', ' ')?.trim() else null
         }?.takeIf { it.length >= 2 && isAcceptableMerchant(it, text, 0) }
@@ -772,9 +768,7 @@ object SmsDebitParser {
         var prevMatchEnd = 0
         while (matcher.find()) {
             val start = matcher.start()
-            val raw = matcher.group(1)?.replace(",", "") ?: continue
-            val rupees = raw.toDoubleOrNull() ?: continue
-            val paise = Math.round(rupees * 100.0)
+            val paise = rupeesToPaise(matcher.group(1)) ?: 0L
             // Context window never reaches past the previous amount, so "Avl Bal Rs X. Rs Y debited"
             // doesn't poison the second amount with the first one's balance context.
             val contextStart = (start - 28).coerceAtLeast(prevMatchEnd)

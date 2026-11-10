@@ -1,5 +1,7 @@
 package app.smspend.data
 
+import app.smspend.util.paiseToPlainRupees
+import app.smspend.util.rupeesToPaise
 import app.smspend.domain.CategoryBucket
 import app.smspend.domain.PeriodAccounting
 import app.smspend.domain.RecurringDetector
@@ -204,16 +206,8 @@ data class CardBillBalance(
         }
 }
 
-private fun formatPaiseShort(paise: Long): String {
-    val rupees = paise / 100.0
-    return if (rupees >= 1000) {
-        String.format(java.util.Locale.US, "%,.0f", rupees)
-    } else if (rupees == rupees.toLong().toDouble()) {
-        rupees.toLong().toString()
-    } else {
-        String.format(java.util.Locale.US, "%.2f", rupees)
-    }
-}
+/** Indian grouping like the rest of the app (was western "%,.0f": "1,234,567"). */
+private fun formatPaiseShort(paise: Long): String = paise.paiseToPlainRupees()
 
 class SpendRepository(
     private val db: SmSpendDatabase,
@@ -1608,9 +1602,7 @@ class SpendRepository(
     private fun extractPaiseWithRegex(pattern: String, body: String): Long? =
         SafeRegex.withMatcher(pattern, body) { m ->
             if (m.find() && m.groupCount() >= 1) {
-                m.group(1)?.replace(",", "")?.toDoubleOrNull()
-                    ?.takeIf { it > 0 }
-                    ?.let { Math.round(it * 100.0) }
+                rupeesToPaise(m.group(1))
             } else {
                 null
             }

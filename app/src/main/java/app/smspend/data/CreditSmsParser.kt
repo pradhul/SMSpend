@@ -1,5 +1,6 @@
 package app.smspend.data
 
+import app.smspend.util.rupeesToPaise
 import app.smspend.domain.IndianBanks
 import java.util.Locale
 import java.util.regex.Pattern
@@ -80,8 +81,7 @@ object CreditSmsParser {
         val text = body.replace('\n', ' ').trim()
         val m = accountCrPattern.matcher(text)
         if (!m.find()) return null
-        val rupees = m.group(1)?.replace(",", "")?.toDoubleOrNull() ?: return null
-        val amount = Math.round(rupees * 100.0).takeIf { it > 0 } ?: return null
+        val amount = rupeesToPaise(m.group(1)) ?: return null
         val bank = IndianBanks.matchSender(sender)
         val payer = accountCrPayerPattern.matcher(text).let { pm ->
             if (pm.find()) pm.group(1)?.trim()?.trimEnd('.', ',', ' ')?.trim() else null
@@ -102,9 +102,7 @@ object CreditSmsParser {
     private fun extractAmountPaise(text: String): Long? {
         val m = amountPattern.matcher(text)
         if (!m.find()) return null
-        val raw = m.group(1)?.replace(",", "") ?: return null
-        val rupees = raw.toDoubleOrNull() ?: return null
-        return Math.round(rupees * 100.0).takeIf { it > 0 }
+        return rupeesToPaise(m.group(1))
     }
 
     /**

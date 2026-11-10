@@ -1,5 +1,6 @@
 package app.smspend.ui
 
+import app.smspend.util.rupeesToPaise
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -913,10 +914,11 @@ class SettingsViewModel(
 
     fun setMonthlyBudgetRupees(rupeesText: String) {
         viewModelScope.launch {
-            val rupees = rupeesText.trim().toLongOrNull()
-            prefs.setMonthlyBudgetPaise(rupees?.times(100))
+            // Same parser as SMS amounts: accepts "50,000", "₹50000", "49999.50".
+            val paise = rupeesToPaise(rupeesText)
+            prefs.setMonthlyBudgetPaise(paise)
             messageIsError.value = false
-            message.value = if (rupees == null || rupees <= 0) "Budget cleared" else "Budget saved"
+            message.value = if (paise == null) "Budget cleared" else "Budget saved"
             SpendWidgetUpdater.update(appContext)
         }
     }
