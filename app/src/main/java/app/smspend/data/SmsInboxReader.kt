@@ -16,8 +16,8 @@ data class RawSms(
     val dateMs: Long,
 )
 
-class SmsInboxReader(private val context: Context) {
-    suspend fun readSince(minDateMs: Long): List<RawSms> = withContext(Dispatchers.IO) {
+open class SmsInboxReader(private val context: Context) {
+    open suspend fun readSince(minDateMs: Long): List<RawSms> = withContext(Dispatchers.IO) {
         // Without this check a revoked permission surfaces as a vague provider error
         // (or, on some OEM ROMs, an empty cursor that looks like "0 new SMS").
         if (!SmsPermissions.canRead(context)) throw SmsPermissionMissingException()
@@ -42,7 +42,7 @@ class SmsInboxReader(private val context: Context) {
         out
     }
 
-    suspend fun readById(smsId: Long): RawSms? = withContext(Dispatchers.IO) {
+    open suspend fun readById(smsId: Long): RawSms? = withContext(Dispatchers.IO) {
         val uri = Telephony.Sms.Inbox.CONTENT_URI
         val projection = arrayOf(
             Telephony.Sms._ID,
@@ -57,7 +57,7 @@ class SmsInboxReader(private val context: Context) {
         }
     }
 
-    suspend fun readByIds(smsIds: Collection<Long>): Map<Long, RawSms> = withContext(Dispatchers.IO) {
+    open suspend fun readByIds(smsIds: Collection<Long>): Map<Long, RawSms> = withContext(Dispatchers.IO) {
         if (smsIds.isEmpty()) return@withContext emptyMap()
         val uri = Telephony.Sms.Inbox.CONTENT_URI
         val projection = arrayOf(
