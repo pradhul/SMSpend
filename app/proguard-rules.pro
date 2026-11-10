@@ -24,6 +24,7 @@
 
 # Receivers / services declared in the manifest (explicit, belt and braces).
 -keep class app.smspend.receive.SmsReceivedReceiver { <init>(); }
+-keep class app.smspend.widget.DateChangeReceiver { <init>(); }
 -keep class app.smspend.notify.UpiNotificationListener { <init>(); }
 
 # Gemini requests/responses are built with org.json (platform), so there are

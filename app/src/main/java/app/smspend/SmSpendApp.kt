@@ -11,6 +11,7 @@ import app.smspend.data.UserPreferences
 import app.smspend.notify.SmSpendNotifications
 import app.smspend.widget.SpendWidgetUpdater
 import app.smspend.work.SmsScanWorker
+import app.smspend.work.WidgetMidnightWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,6 +42,7 @@ class SmSpendApp : Application() {
         // New SMS now arrive through SmsReceivedReceiver; drop the 30-minute
         // periodic scan that versions <= 1.2.0 scheduled.
         SmsScanWorker.cancelLegacyPeriodic(this)
+        runCatchingCancellable { WidgetMidnightWorker.schedule(this) }
         appScope.launch {
             // <= 1.2.0 stored the Gemini key in plain text; encrypt it with the Keystore.
             runCatchingCancellable { prefs.migrateLegacyApiKey() }

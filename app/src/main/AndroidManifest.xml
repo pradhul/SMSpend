@@ -61,6 +61,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- Widget "Today" must roll over at midnight and follow clock / time-zone changes. -->
+        <receiver
+            android:name=".widget.DateChangeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.DATE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".widget.SpendWidgetReceiver"
             android:exported="true"
