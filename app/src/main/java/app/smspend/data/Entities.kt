@@ -18,6 +18,11 @@ import java.util.Locale
         Index(value = ["type"]),
         Index(value = ["sourceKey"]),
         Index(value = ["statusTag"]),
+        // Composite indexes for the hot range queries (v13).
+        Index(value = ["category", "occurredAt"]),
+        Index(value = ["type", "occurredAt"]),
+        Index(value = ["amountPaise", "occurredAt"]),
+        Index(value = ["merchantKey", "type"]),
     ],
 )
 data class TransactionEntity(
@@ -199,6 +204,7 @@ data class DuplicateDecisionEntity(
 @Entity(
     tableName = "learned_tx_decisions",
     primaryKeys = ["sourceKey", "decisionType"],
+    indices = [Index(value = ["decisionType", "decision"])],
 )
 data class LearnedTxDecisionEntity(
     val sourceKey: String,

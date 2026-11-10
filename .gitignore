@@ -19,3 +19,7 @@ design/stitch/screens/*.detail.json
 design/stitch/screens/*.raw.txt
 package-lock.json
 google-stitch-sdk-*.tgz
+# Release signing — never commit keystores or their passwords.
+keystore.properties
+*.jks
+*.keystore
