@@ -3197,7 +3197,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
             title = "Export transactions",
-            body = "Saves a JSON dump to Downloads. “Other” exports categorized Other spends; “ALL inbox SMS” dumps every message on the device (no date limit) — useful for refining categorization and debugging from another device.",
+            body = "Only runs when you tap a button below. Saves a JSON file to your public Downloads folder that contains full SMS text, so other apps with file access can read it — delete it once you're done. “Other” exports categorized Other spends; “ALL inbox SMS” dumps every message on the device (no date limit).",
         ) {
             OutlinedButton(
                 onClick = {
@@ -3234,7 +3234,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
         SettingsCard(
             title = "Diagnostics",
-            body = "Rolling on-device categorization log (${state.logSizeLabel}). Export to Downloads when something looks wrong, or clear to free space.",
+            body = "Rolling on-device categorization log (${state.logSizeLabel}). SMS text in it is masked (digits hidden). It's only saved to Downloads when you tap Export; clear it to free space.",
         ) {
             OutlinedButton(
                 onClick = {

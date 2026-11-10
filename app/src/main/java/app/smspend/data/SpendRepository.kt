@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.regex.Pattern
 import kotlin.math.abs
 import app.smspend.notify.UpiNotificationParser
 import app.smspend.util.runCatchingCancellable
@@ -1603,14 +1602,11 @@ class SpendRepository(
             .mapNotNull { extractPaiseWithRegex(it.pattern, body) }
             .firstOrNull()
 
-    private fun safeRegexMatch(pattern: String, body: String): Boolean =
-        runCatchingCancellable {
-            Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(body).find()
-        }.getOrDefault(false)
+    /** Cached, length-capped, time-boxed — see [SafeRegex]. */
+    private fun safeRegexMatch(pattern: String, body: String): Boolean = SafeRegex.find(pattern, body)
 
     private fun extractPaiseWithRegex(pattern: String, body: String): Long? =
-        runCatchingCancellable {
-            val m = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(body)
+        SafeRegex.withMatcher(pattern, body) { m ->
             if (m.find() && m.groupCount() >= 1) {
                 m.group(1)?.replace(",", "")?.toDoubleOrNull()
                     ?.takeIf { it > 0 }
@@ -1618,7 +1614,11 @@ class SpendRepository(
             } else {
                 null
             }
-        }.getOrNull()
+        }
+
+    /** Saved rules must be cheap to run and specific to a format, not just "any SMS". */
+    private fun isSaveableRule(pattern: String): Boolean =
+        SafeRegex.isSafe(pattern) && AiSmsTriage.longestLiteralRun(pattern) >= AiSmsTriage.MIN_LITERAL_ANCHOR
 
     /**
      * Re-runs the (current) parser over every stored transaction: rows the parser now
@@ -2318,7 +2318,7 @@ class SpendRepository(
             txDao.updateAiStatusForIds(listOf(tx.id), TransactionEntity.AI_PENDING)
             var ruleSaved = false
             val regex = ai.amountRegex
-            if (regex != null && extractPaiseWithRegex(regex, tx.bodySnippet) == ai.amountPaise) {
+            if (regex != null && isSaveableRule(regex) && extractPaiseWithRegex(regex, tx.bodySnippet) == ai.amountPaise) {
                 ruleDao.insert(
                     ParseRuleEntity(
                         senderKey = senderKey,
@@ -2343,7 +2343,7 @@ class SpendRepository(
         )
         var ruleSaved = false
         val ignoreRegex = ai?.ignoreRegex
-        if (ignoreRegex != null && safeRegexMatch(ignoreRegex, tx.bodySnippet)) {
+        if (ignoreRegex != null && isSaveableRule(ignoreRegex) && safeRegexMatch(ignoreRegex, tx.bodySnippet)) {
             ruleDao.insert(
                 ParseRuleEntity(
                     senderKey = senderKey,

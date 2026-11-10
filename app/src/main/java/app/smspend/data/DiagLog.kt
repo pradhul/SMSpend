@@ -48,8 +48,26 @@ object DiagLog {
     fun e(tag: String, msg: String, data: Map<String, Any?> = emptyMap()) =
         log("E", tag, msg, data)
 
-    fun truncateSnippet(text: String, max: Int = SNIPPET_MAX): String =
-        if (text.length <= max) text else text.take(max) + "…"
+    /**
+     * SMS text never goes into the log verbatim: every digit is masked (amounts,
+     * account numbers, OTPs, refs) and the result is truncated. The "shape" that is
+     * left ("Rs ###.## debited from a/c **#### to VPA …") is what parser debugging
+     * needs; the log can be exported to Downloads, so it must not hold secrets.
+     */
+    fun truncateSnippet(text: String, max: Int = SNIPPET_MAX): String = redactSms(text, max)
+
+    fun redactSms(text: String, max: Int = SNIPPET_MAX): String {
+        val masked = text.replace(DIGIT, "#").replace(WHITESPACE, " ").trim()
+        return if (masked.length <= max) masked else masked.take(max) + "…"
+    }
+
+    /** Free-text values (error messages etc.) may quote SMS; mask long digit runs. */
+    internal fun redactValue(value: String): String = value.replace(LONG_DIGITS) { "#".repeat(it.value.length) }
+
+    private val DIGIT = Regex("""\d""")
+    private val WHITESPACE = Regex("""\s+""")
+    private val LONG_DIGITS = Regex("""\d{4,}""")
+    private val SMS_TEXT_KEYS = setOf("snippet", "body", "sample", "sms", "text")
 
     fun approxSizeBytes(): Long = synchronized(lock) {
         val d = dir ?: return 0L
@@ -141,14 +159,15 @@ object DiagLog {
             .put("ts", iso.format(Date()))
             .put("level", level)
             .put("tag", tag)
-            .put("msg", msg)
+            .put("msg", redactValue(msg))
         if (data.isNotEmpty()) {
             val dataObj = JSONObject()
             for ((k, v) in data) {
                 when (v) {
                     null -> dataObj.put(k, JSONObject.NULL)
-                    is Number, is Boolean, is String -> dataObj.put(k, v)
-                    else -> dataObj.put(k, v.toString())
+                    is Number, is Boolean -> dataObj.put(k, v)
+                    is String -> dataObj.put(k, if (k in SMS_TEXT_KEYS) redactSms(v) else redactValue(v))
+                    else -> dataObj.put(k, redactValue(v.toString()))
                 }
             }
             obj.put("data", dataObj)

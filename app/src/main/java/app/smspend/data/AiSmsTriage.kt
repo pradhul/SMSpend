@@ -3,8 +3,6 @@ package app.smspend.data
 import app.smspend.domain.IndianBanks
 import java.util.Locale
 import java.util.regex.Pattern
-import java.util.regex.PatternSyntaxException
-import app.smspend.util.runCatchingCancellable
 
 /** Amount (and optional payee) pulled from an SMS by a learned per-sender template. */
 data class TemplateMatch(
@@ -80,6 +78,7 @@ object AiSmsTriage {
     ): Boolean {
         if (pattern.isBlank() || pattern.length > MAX_TEMPLATE_LENGTH) return false
         if (!pattern.contains("(?<amount>")) return false
+        if (!SafeRegex.isSafe(pattern)) return false
         if (longestLiteralRun(pattern) < MIN_LITERAL_ANCHOR) return false
         val match = applyTemplate(pattern, sampleBody) ?: return false
         if (match.amountPaise != expectedAmountPaise) return false
@@ -100,27 +99,23 @@ object AiSmsTriage {
 
     /** Runs a stored template against [body]; null when it does not match or yields no amount. */
     fun applyTemplate(pattern: String, body: String): TemplateMatch? {
-        val compiled = compile(pattern) ?: return null
-        val m = compiled.matcher(body.replace('\n', ' '))
-        if (!m.find()) return null
-        val raw = runCatchingCancellable { m.group("amount") }.getOrNull() ?: return null
+        val groups = SafeRegex.withMatcher(pattern, body.replace('\n', ' ')) { m ->
+            if (!m.find()) return@withMatcher null
+            val amount = runCatching { m.group("amount") }.getOrNull()
+            val payee = runCatching { m.group("payee") }.getOrNull()
+            amount to payee
+        } ?: return null
+        val raw = groups.first ?: return null
         val rupees = raw.replace(",", "").trim().toDoubleOrNull() ?: return null
         val paise = Math.round(rupees * 100.0)
         if (paise <= 0) return null
-        val payee = runCatchingCancellable { m.group("payee") }.getOrNull()
+        val payee = groups.second
             ?.trim()
             ?.trimEnd('.', ',', ';', ' ')
             ?.trim()
             ?.takeIf { it.length >= 2 }
         return TemplateMatch(amountPaise = paise, payee = payee)
     }
-
-    private fun compile(pattern: String): Pattern? =
-        try {
-            Pattern.compile(pattern, Pattern.CASE_INSENSITIVE)
-        } catch (_: PatternSyntaxException) {
-            null
-        }
 
     /** Longest run of required literal characters (escapes like \d, classes, groups, optional chars break it). */
     internal fun longestLiteralRun(pattern: String): Int {
