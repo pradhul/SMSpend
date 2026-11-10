@@ -162,6 +162,7 @@ class GeminiCategorizer(
         /** Transactions per Gemini call in the batched categorization pass. */
         const val AI_BATCH_SIZE = 80
         const val DUPLICATE_NOTE = "Possible duplicate"
+        const val API_KEY_HEADER = "x-goog-api-key"
 
         /** Structured-output schema: [{"id": 12, "category": "Food & dining"}, …]. */
         private val ID_CATEGORY_ARRAY_SCHEMA: JSONObject = JSONObject()
@@ -582,10 +583,16 @@ class GeminiCategorizer(
             payload.put("generationConfig", config)
         }
         val body = payload.toString().toRequestBody("application/json".toMediaType())
-        val url =
-            "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+        // Key goes in a header, not the query string, so it never lands in URL logs,
+        // proxies or OkHttp's own exception messages.
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+        val request = Request.Builder()
+            .url(url)
+            .header(API_KEY_HEADER, apiKey)
+            .post(body)
+            .build()
         return runCatchingCancellable {
-            client.newCall(Request.Builder().url(url).post(body).build()).execute().use { response ->
+            client.newCall(request).execute().use { response ->
                 val raw = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
                     val apiMsg = runCatchingCancellable {

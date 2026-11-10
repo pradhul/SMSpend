@@ -42,6 +42,8 @@ class SmSpendApp : Application() {
         // periodic scan that versions <= 1.2.0 scheduled.
         SmsScanWorker.cancelLegacyPeriodic(this)
         appScope.launch {
+            // <= 1.2.0 stored the Gemini key in plain text; encrypt it with the Keystore.
+            runCatchingCancellable { prefs.migrateLegacyApiKey() }
             // Parser logic changed: re-check previously imported transactions once.
             if (prefs.parserVersion.first() < SmsDebitParser.VERSION) {
                 runCatchingCancellable {
