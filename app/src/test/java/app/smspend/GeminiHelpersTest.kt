@@ -1,5 +1,6 @@
 package app.smspend
 
+import app.smspend.data.SpendRules
 import app.smspend.data.DuplicateDecisionEntity
 import app.smspend.data.GeminiCategorizer
 import app.smspend.data.SmsDebitParser
@@ -110,7 +111,7 @@ class GeminiHelpersTest {
             txn(3, 25_000, 1_000_000L + 30 * hour, "VK-HDFCBK", "other"), // outside 24h
             txn(4, 50_000, 1_000_000L + hour, "VK-HDFCBK", "fuel"), // different amount
         )
-        val pairs = SpendRepository.buildDuplicatePairCandidates(txs, windowMs = 24 * hour)
+        val pairs = SpendRules.buildDuplicatePairCandidates(txs, windowMs = 24 * hour)
         assertEquals(1, pairs.size)
         assertEquals(1L, pairs[0].earlierId)
         assertEquals(2L, pairs[0].laterId)
@@ -126,7 +127,7 @@ class GeminiHelpersTest {
             txn(1, 10_000, 1_000L, "VK-HDFCBK", "a"),
             txn(2, 10_000, 2_000L, "VM-APP", "b", statusTag = GeminiCategorizer.DUPLICATE_NOTE),
         )
-        assertTrue(SpendRepository.buildDuplicatePairCandidates(txs).isEmpty())
+        assertTrue(SpendRules.buildDuplicatePairCandidates(txs).isEmpty())
     }
 
     @Test
@@ -137,12 +138,12 @@ class GeminiHelpersTest {
         )
         val key = DuplicateDecisionEntity.pairKeyFor(txs[0], txs[1])
         assertTrue(
-            SpendRepository.buildDuplicatePairCandidates(
+            SpendRules.buildDuplicatePairCandidates(
                 txs,
                 excludedPairKeys = setOf(key),
             ).isEmpty(),
         )
-        assertEquals(1, SpendRepository.buildDuplicatePairCandidates(txs).size)
+        assertEquals(1, SpendRules.buildDuplicatePairCandidates(txs).size)
     }
 
     @Test
@@ -177,7 +178,7 @@ class GeminiHelpersTest {
                 category = "FOOD_DINING",
             ),
         )
-        val result = SpendRepository.applyTagNetting(txs)
+        val result = SpendRules.applyTagNetting(txs)
         val bills = result.spends.first { it.bucket.key == "BILLS" }
         assertEquals(3_000_00, bills.totalPaise)
         assertEquals(1, result.offsets.size)
@@ -208,7 +209,7 @@ class GeminiHelpersTest {
                 type = TransactionEntity.TYPE_CREDIT,
             ),
         )
-        val result = SpendRepository.applyTagNetting(txs)
+        val result = SpendRules.applyTagNetting(txs)
         assertTrue(result.offsets.isEmpty())
         // Duplicate-noted rows don't count toward totals at all.
         assertTrue(result.spends.isEmpty())
@@ -236,7 +237,7 @@ class GeminiHelpersTest {
                 category = "SHOPPING",
             ),
         )
-        val bal = SpendRepository.cardBillBalance(txs)!!
+        val bal = SpendRules.cardBillBalance(txs)!!
         assertEquals(10_000_00, bal.billPaise)
         assertEquals(2_250_00, bal.cardSpendPaise)
         assertTrue(bal.notice.contains("Card bill"))
