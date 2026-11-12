@@ -2,12 +2,15 @@ package app.smspend.notify
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.Manifest
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import app.smspend.MainActivity
 import app.smspend.R
 
@@ -37,16 +40,25 @@ object SmSpendNotifications {
         manager.deleteNotificationChannel(LEGACY_CHANNEL_ALERTS)
     }
 
+    /** POST_NOTIFICATIONS is a runtime permission on Android 13+; the user may deny it. */
+    fun canPost(context: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+
     fun notifyNewSpends(context: Context, count: Int) {
         if (count <= 0) return
+        if (!canPost(context)) return
         ensureChannels(context)
         val notification = baseBuilder(context, CHANNEL_SCAN)
             .setContentTitle("SMSpend")
             .setContentText(if (count == 1) "Added 1 spend" else "Added $count spends")
             .setSilent(true)
             .build()
-        runCatching {
+        try {
             NotificationManagerCompat.from(context).notify(ID_SCAN, notification)
+        } catch (_: SecurityException) {
+            // Permission revoked between the check and the post.
         }
     }
 

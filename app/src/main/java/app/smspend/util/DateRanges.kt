@@ -56,8 +56,20 @@ object DateRanges {
         return cal.timeInMillis
     }
 
+    /** Midnight that ends the day containing [now] (local time, DST-safe). */
+    fun startOfTomorrowMs(now: Long = System.currentTimeMillis()): Long {
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = startOfTodayMs(now)
+        cal.add(Calendar.DAY_OF_MONTH, 1)
+        return cal.timeInMillis
+    }
+
+    /**
+     * Today as [start, end) where end is the coming midnight — not "now". Room flows
+     * observing this window keep picking up transactions that arrive later today.
+     */
     fun todayWindow(now: Long = System.currentTimeMillis()): Pair<Long, Long> =
-        startOfTodayMs(now) to endExclusiveNow(now)
+        startOfTodayMs(now) to startOfTomorrowMs(now)
 
     fun formatTodaySubtitle(now: Long = System.currentTimeMillis()): String =
         java.text.SimpleDateFormat("EEE · MMM d", Locale.getDefault()).format(now)
@@ -87,8 +99,8 @@ object DateRanges {
         return cal.timeInMillis
     }
 
+    /** End of the month (start of the next one), also for the current month. */
     fun endExclusiveOfMonthMs(monthsAgo: Int, now: Long = System.currentTimeMillis()): Long {
-        if (monthsAgo == 0) return endExclusiveNow(now)
         val cal = Calendar.getInstance()
         cal.timeInMillis = startOfMonthMs(monthsAgo, now)
         cal.add(Calendar.MONTH, 1)
@@ -128,8 +140,7 @@ object DateRanges {
             (b.get(Calendar.YEAR) - a.get(Calendar.YEAR)) * 12 +
                 (b.get(Calendar.MONTH) - a.get(Calendar.MONTH))
         }
-        val endExclusive = if (monthsAgo == 0) endExclusiveNow(now) else end
-        return MonthWindow(monthsAgo = monthsAgo, startMs = start, endExclusiveMs = endExclusive)
+        return MonthWindow(monthsAgo = monthsAgo, startMs = start, endExclusiveMs = end)
     }
 
     /** Last N months including this month, newest first (for picker UI). */
@@ -173,9 +184,15 @@ object DateRanges {
 
     fun formatMonthSubtitle(startMs: Long, endExclusiveMs: Long): String {
         val fmt = java.text.SimpleDateFormat("MMM d", Locale.getDefault())
-        val end = (endExclusiveMs - 1).coerceAtLeast(startMs)
-        return "${fmt.format(startMs)} – ${fmt.format(end)}"
+        return "${fmt.format(startMs)} – ${fmt.format(displayEnd(startMs, endExclusiveMs))}"
     }
+
+    /**
+     * Last day shown in a period label. Current periods end in the future, so the label
+     * stops at today ("Nov 1 – Nov 10") while the query window runs to the period end.
+     */
+    private fun displayEnd(startMs: Long, endExclusiveMs: Long, now: Long = System.currentTimeMillis()): Long =
+        minOf(endExclusiveMs - 1, now).coerceAtLeast(startMs)
 
     /** Week starting Monday 00:00 local. */
     fun startOfThisWeekMs(now: Long = System.currentTimeMillis()): Long {
@@ -203,8 +220,8 @@ object DateRanges {
         return cal.timeInMillis
     }
 
+    /** End of the week (next Monday 00:00), also for the current week. */
     fun endExclusiveOfWeekMs(weeksAgo: Int, now: Long = System.currentTimeMillis()): Long {
-        if (weeksAgo == 0) return endExclusiveNow(now)
         val cal = Calendar.getInstance()
         cal.timeInMillis = startOfWeekMs(weeksAgo, now)
         cal.add(Calendar.WEEK_OF_YEAR, 1)
@@ -221,12 +238,23 @@ object DateRanges {
     fun homeWeeks(now: Long = System.currentTimeMillis()): List<WeekWindow> =
         ((HOME_WEEK_COUNT - 1) downTo 0).map { weekWindow(it, now) }
 
+    /**
+     * "Up to now" for one-shot reads. Never use it as the end of an observed window:
+     * the bound is frozen when the flow starts, so later transactions would be missed.
+     * Use the period end ([todayWindow], [weekWindow], [monthWindow]) or [OPEN_END_MS].
+     */
     fun endExclusiveNow(now: Long = System.currentTimeMillis()): Long = now + 1
+
+    /** Open upper bound for observed ranges that should include future inserts. */
+    const val OPEN_END_MS: Long = Long.MAX_VALUE
+
+    /** Millis until the next local midnight (at least 1). */
+    fun msUntilNextDay(now: Long = System.currentTimeMillis()): Long =
+        (startOfTomorrowMs(now) - now).coerceAtLeast(1L)
 
     fun formatWeekRange(fromMs: Long, toMs: Long): String {
         val fmt = java.text.SimpleDateFormat("MMM d", Locale.getDefault())
-        val end = (toMs - 1).coerceAtLeast(fromMs)
-        return "${fmt.format(fromMs)} – ${fmt.format(end)}"
+        return "${fmt.format(fromMs)} – ${fmt.format(displayEnd(fromMs, toMs))}"
     }
 
     fun formatTxnTime(ms: Long): String {

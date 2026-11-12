@@ -1,5 +1,6 @@
 package app.smspend.notify
 
+import app.smspend.util.rupeesToPaise
 import java.util.Locale
 import java.util.regex.Pattern
 
@@ -70,10 +71,7 @@ object UpiNotificationParser {
         val matcher = amountPattern.matcher(text)
         var best: Long? = null
         while (matcher.find()) {
-            val raw = matcher.group(1)?.replace(",", "") ?: continue
-            val rupees = raw.toDoubleOrNull() ?: continue
-            val paise = Math.round(rupees * 100.0)
-            if (paise > 0) best = paise
+            rupeesToPaise(matcher.group(1))?.let { best = it }
         }
         return best
     }

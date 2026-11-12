@@ -1,5 +1,6 @@
 package app.smspend
 
+import app.smspend.data.SpendRules
 import app.smspend.data.CreditSmsParser
 import app.smspend.data.SpendRepository
 import app.smspend.data.TransactionEntity
@@ -17,14 +18,14 @@ import org.junit.Test
 class ApplyToSimilarTest {
     @Test
     fun creditNeverAppliesToSimilar_evenWhenRequested() {
-        assertFalse(SpendRepository.shouldApplyToSimilar(credit(), requested = true))
-        assertFalse(SpendRepository.shouldApplyToSimilar(credit(), requested = false))
+        assertFalse(SpendRules.shouldApplyToSimilar(credit(), requested = true))
+        assertFalse(SpendRules.shouldApplyToSimilar(credit(), requested = false))
     }
 
     @Test
     fun debitAppliesToSimilarOnlyWhenRequested() {
-        assertTrue(SpendRepository.shouldApplyToSimilar(debit(), requested = true))
-        assertFalse(SpendRepository.shouldApplyToSimilar(debit(), requested = false))
+        assertTrue(SpendRules.shouldApplyToSimilar(debit(), requested = true))
+        assertFalse(SpendRules.shouldApplyToSimilar(debit(), requested = false))
     }
 
     /** Documents why credits must not bulk-retag: same bank → same merchantKey. */

@@ -7,7 +7,10 @@ import app.smspend.smSpend
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import app.smspend.data.DiagLog
+import app.smspend.util.runCatchingCancellable
 
 /**
  * Captures UPI app notifications (PhonePe first) so payee / typed note can be merged
@@ -28,15 +31,31 @@ class UpiNotificationListener : NotificationListenerService() {
         val parsed = UpiNotificationParser.parse(title, text, bigText) ?: return
         val postedAt = sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis()
 
+        val packageName = sbn.packageName
         scope.launch {
-            applicationContext.smSpend.repository.captureUpiNotification(
-                packageName = sbn.packageName,
-                amountPaise = parsed.amountPaise,
-                payee = parsed.payee,
-                note = parsed.candidateNote,
-                postedAt = postedAt,
-            )
+            // An uncaught exception here would take down the whole app process.
+            runCatchingCancellable {
+                applicationContext.smSpend.repository.captureUpiNotification(
+                    packageName = packageName,
+                    amountPaise = parsed.amountPaise,
+                    payee = parsed.payee,
+                    note = parsed.candidateNote,
+                    postedAt = postedAt,
+                )
+            }.onFailure {
+                DiagLog.w("upi", "capture_failed", mapOf("error" to it.javaClass.simpleName))
+            }
         }
+    }
+
+    /**
+     * The service can be unbound and destroyed (access revoked, app updated); stop any
+     * in-flight capture instead of leaking the scope. A disconnect alone may be followed
+     * by a rebind of this same instance, so the scope only ends in onDestroy.
+     */
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
     }
 
     companion object {

@@ -1,9 +1,9 @@
 package app.smspend.data
 
+import app.smspend.util.rupeesToPaise
 import app.smspend.domain.IndianBanks
 import java.util.Locale
 import java.util.regex.Pattern
-import java.util.regex.PatternSyntaxException
 
 /** Amount (and optional payee) pulled from an SMS by a learned per-sender template. */
 data class TemplateMatch(
@@ -79,6 +79,7 @@ object AiSmsTriage {
     ): Boolean {
         if (pattern.isBlank() || pattern.length > MAX_TEMPLATE_LENGTH) return false
         if (!pattern.contains("(?<amount>")) return false
+        if (!SafeRegex.isSafe(pattern)) return false
         if (longestLiteralRun(pattern) < MIN_LITERAL_ANCHOR) return false
         val match = applyTemplate(pattern, sampleBody) ?: return false
         if (match.amountPaise != expectedAmountPaise) return false
@@ -91,35 +92,29 @@ object AiSmsTriage {
     fun amountAppearsIn(body: String, amountPaise: Long): Boolean {
         val m = anyAmountPattern.matcher(body)
         while (m.find()) {
-            val rupees = "${m.group(1).replace(",", "")}.${m.group(2) ?: "0"}".toDoubleOrNull() ?: continue
-            if (Math.round(rupees * 100.0) == amountPaise) return true
+            val paise = rupeesToPaise(m.group(1) + (m.group(2)?.let { ".$it" } ?: "")) ?: continue
+            if (paise == amountPaise) return true
         }
         return false
     }
 
     /** Runs a stored template against [body]; null when it does not match or yields no amount. */
     fun applyTemplate(pattern: String, body: String): TemplateMatch? {
-        val compiled = compile(pattern) ?: return null
-        val m = compiled.matcher(body.replace('\n', ' '))
-        if (!m.find()) return null
-        val raw = runCatching { m.group("amount") }.getOrNull() ?: return null
-        val rupees = raw.replace(",", "").trim().toDoubleOrNull() ?: return null
-        val paise = Math.round(rupees * 100.0)
-        if (paise <= 0) return null
-        val payee = runCatching { m.group("payee") }.getOrNull()
+        val groups = SafeRegex.withMatcher(pattern, body.replace('\n', ' ')) { m ->
+            if (!m.find()) return@withMatcher null
+            val amount = runCatching { m.group("amount") }.getOrNull()
+            val payee = runCatching { m.group("payee") }.getOrNull()
+            amount to payee
+        } ?: return null
+        val raw = groups.first ?: return null
+        val paise = rupeesToPaise(raw) ?: return null
+        val payee = groups.second
             ?.trim()
             ?.trimEnd('.', ',', ';', ' ')
             ?.trim()
             ?.takeIf { it.length >= 2 }
         return TemplateMatch(amountPaise = paise, payee = payee)
     }
-
-    private fun compile(pattern: String): Pattern? =
-        try {
-            Pattern.compile(pattern, Pattern.CASE_INSENSITIVE)
-        } catch (_: PatternSyntaxException) {
-            null
-        }
 
     /** Longest run of required literal characters (escapes like \d, classes, groups, optional chars break it). */
     internal fun longestLiteralRun(pattern: String): Int {

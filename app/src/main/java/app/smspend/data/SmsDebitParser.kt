@@ -3,6 +3,7 @@ package app.smspend.data
 import java.util.Locale
 import java.util.regex.Pattern
 import kotlin.math.abs
+import app.smspend.util.rupeesToPaise
 
 data class ParsedDebit(
     val amountPaise: Long,
@@ -40,7 +41,7 @@ data class CrossSourcePoint(
 
 object SmsDebitParser {
     /** Bump when parsing logic changes so stored transactions get re-checked once. */
-    const val VERSION = 11
+    const val VERSION = 12
 
     /** Inbox rescan start on a VERSION bump (Canara "Acct … Dr. INR" template began Jul 2026). */
     const val BACKFILL_SINCE_YEAR = 2026
@@ -113,20 +114,53 @@ object SmsDebitParser {
     private val hardBlockers = listOf(
         "one time password", "has requested", "is requesting", "requested money",
         "collect request", "payment request", "will be debited", "will be deducted",
-        "due on", "is due", "overdue", "min due", "minimum due", "total due", "min amt due",
-        "statement", "e-mandate", "emandate", "mandate created", "mandate registered",
+        "e-mandate", "emandate", "mandate created", "mandate registered",
         "mandate set", "insufficient", "declined", "reversed", "reversal", "autopay setup",
         "txn failed", "transaction failed", "payment failed", "could not be processed",
     )
+
+    /** "…transaction of Rs 500 to x@ybl failed", "…for a UPI transaction that has failed". */
+    private val failedPattern = Pattern.compile("""(?i)\b(?:has\s+)?failed\b""")
+
+    /**
+     * Bill / statement wording. These only block when there is no completed-debit
+     * evidence: "Rs 300 debited … Click here to see your statement" is still a spend,
+     * while "card statement: total due Rs 45,000" is not.
+     */
+    private val softBlockers = listOf(
+        "due on", "is due", "overdue", "min due", "minimum due", "total due", "min amt due",
+        "statement",
+    )
     private val otpPattern = Pattern.compile("""(?i)\botp\b""")
 
-    /** Promotional smell; blocks messages that lack strong (past-tense) debit evidence. */
+    /**
+     * Promotional smell; blocks messages that lack strong (past-tense) debit evidence.
+     * Checked on the text with links removed: banks put fraud-report / details URLs in
+     * the footer of real debits ("Not you, https://…"), so a link alone isn't promo.
+     */
     private val promoBlockers = listOf(
         "loan", "offer", "pre-approved", "pre approved", "preapproved", "apply now",
         "cashback", "discount", "voucher", "eligible", "congratulations", "reward",
-        "insurance", "recharge", "renew", "upto", "up to", "hurry", "click", "http",
-        "www.", "interest rate", "win ", "t&c", "tnc",
+        "insurance", "recharge", "renew", "upto", "up to", "hurry", "click",
+        "interest rate", "win ", "t&c", "tnc",
     )
+    private val urlPattern = Pattern.compile("""(?i)\b(?:https?://|www\.)\S+""")
+
+    /** BoB: "Rs.200.00 Dr. from A/C XXXXXX1234 and Cr. to abc@ybl." */
+    private val amountDrFromPattern = Pattern.compile(
+        """(?i)(?:rs\.?|inr|₹)\s*:?\s*([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s+Dr\.?\s+from\b""",
+    )
+    private val crToPayeePattern = Pattern.compile(
+        """(?i)\bCr\.?\s+to\s+([A-Za-z0-9._@&' -]{2,60}?)(?=\s*[.;,(]\s|\s*[.;]?$|\s+(?:on|via|ref|upi)\b)""",
+    )
+
+    /** SBI: "A/C X1234 debited by 50.0 on date …" — amount without a currency marker. */
+    private val bareDebitedAmountPattern = Pattern.compile(
+        """(?i)\bdebited\s+(?:by|with|for)\s+(?:rs\.?|inr|₹)?\s*([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)(?![0-9])""",
+    )
+
+    /** Personal (non-DLT) senders: "+919812345678", "09812345678". Banks never use these. */
+    private val personalSenderPattern = Pattern.compile("""^\+?\d{10,13}$""")
 
     /**
      * Matches "Rs 1,23,456.78", "INR 500", "₹2,000" — supports both Indian (2,2,3)
@@ -140,8 +174,12 @@ object SmsDebitParser {
     /** If these appear just before an amount, it's a balance/limit/offer figure, not the spend. */
     private val badAmountContext = listOf(
         "bal", "avl", "avbl", "available", "limit", "due", "outstanding",
-        "upto", "up to", "worth", "cashback", "reward",
+        "upto", "up to", "cashback", "reward",
     )
+
+    /** "worth" is a voucher/offer figure, except "purchase worth Rs 1,050 at DMART". */
+    private val worthContext = Pattern.compile("""(?i)\bworth\b""")
+    private val spendWorthContext = Pattern.compile("""(?i)\b(?:purchase|transaction|txn|payment)\s+worth\b""")
     private val badAmountContextWords = Pattern.compile("""(?i)\b(get|win|save|earn|loan)(\s+of)?\s*$""")
 
     /** ATM: "Withdrawn Rs.20000 From … Card x1868 At +KUDLU MAIN ROAD …" */
@@ -155,8 +193,13 @@ object SmsDebitParser {
     )
 
     private val merchantPatterns = listOf(
+        // Axis: "UPI/P2M/430512345678/ZOMATO" — payee is the segment after the ref.
+        Pattern.compile("""(?i)\bUPI/P2[AM]/\d+/([A-Za-z0-9 .&'@_-]{2,40}?)(?=/|\s+not\b|\s{2}|\s*$)"""),
+        // ICICI: "…debited for Rs 240.00 on 01-Nov-26; ZOMATO credited."
+        Pattern.compile("""(?i);\s*([A-Za-z0-9 .&'@_-]{2,60}?)\s+credited\b"""),
+        // \b: "to" inside "ZOMATO credited" isn't the word "to".
         Pattern.compile(
-            """(?i)(?:to|at|towards|for|paid to|sent to|VPA\s*)[:\s]+([A-Za-z0-9 .&'@_+-]{2,80}?)(?=\s+(?:via|on|ref|upi|not you|avbl|umrn|avl|\d{1,2}[/-])|[.!,]|$)""",
+            """(?i)\b(?:to|at|towards|for|paid to|sent to|VPA\s*)[:\s]+([A-Za-z0-9 .&'@_+-]{2,80}?)(?=\s+(?:via|on|from|ref|upi|not you|avbl|umrn|avl|\d{1,2}[/-])|\s*\(|[.!,]|$)""",
         ),
         Pattern.compile("""(?i)info[:\s]+([A-Za-z0-9 .&_-]{2,80}?)(?=\.\s*Avl|\.\s*Available|$)"""),
         Pattern.compile("""(?i)UPI/([A-Za-z0-9._-]{2,40})"""),
@@ -164,6 +207,8 @@ object SmsDebitParser {
 
     private val currencyPrefix = Pattern.compile("""(?i)^(INR|Rs\.?|₹)\b""")
     private val barePhone = Pattern.compile("""^\d{10,}$""")
+    private val leadingPhone = Pattern.compile("""^\+?\d{10,}\b""")
+    private val embeddedAmount = Pattern.compile("""(?i)(?:\b(?:rs\.?|inr)|₹)\s*\d""")
     private val blockToContext = Pattern.compile(
         """(?i)(?:sms\s*block|block\s+\w+\s+\d{2,}\s+to|call)\s*$""",
     )
@@ -185,7 +230,9 @@ object SmsDebitParser {
      */
     private val txnRefPatterns = listOf(
         Pattern.compile(
-            """(?i)(?:UPI\s*Ref(?:\s*No)?|Ref(?:erence)?(?:\s*No)?|UTR|RRN|Txn\s*(?:ID|No))[.:#\s]*([A-Za-z0-9]{6,25})""",
+            // "Reference number 9988776655": the word "number" is not the ref. The ref must
+            // carry a digit, or unrelated payments would share a dedup key.
+            """(?i)(?:UPI\s*Ref(?:\s*No)?|Ref(?:erence)?(?:\s*(?:No|Number|Num))?|UTR|RRN|Txn\s*(?:ID|No))\b[.:#\s]*((?=[A-Za-z]*\d)[A-Za-z0-9]{6,25})\b""",
         ),
         // Canara: "UPI: 130598832435" / "IMPS: 626616662833"
         Pattern.compile("""(?i)\b(?:UPI|IMPS)\s*:\s*(\d{9,})"""),
@@ -478,20 +525,28 @@ object SmsDebitParser {
 
         if (otpPattern.matcher(lower).find()) return null
         if (hardBlockers.any { lower.contains(it) }) return null
+        if (failedPattern.matcher(lower).find()) return null
 
         // Outbound NEFT confirmation ("credited to <payee>") — before debit/credit gates,
         // because the body has no debit keyword and "credited" would otherwise reject it.
         parseNeftCreditedToPayee(text)?.let { return it }
         parseAccountDrDebit(text, sender)?.let { return it }
+        parseAmountDrFrom(text, sender)?.let { return it }
 
         val hasStrong = strongDebitHints.any { lower.contains(it) }
         val hasWeak = weakDebitHints.any { lower.contains(it) }
         if (!hasStrong && !hasWeak) return null
 
+        // Person-to-person chatter ("Hey I paid Rs 500 for the cab") from a phone number.
+        if (!hasStrong && personalSenderPattern.matcher(sender.trim()).matches()) return null
+        if (!hasStrong && softBlockers.any { lower.contains(it) }) return null
         if (creditHints.any { lower.contains(it) } && !hasStrong) return null
-        if (!hasStrong && promoBlockers.any { lower.contains(it) }) return null
+        if (!hasStrong) {
+            val withoutLinks = urlPattern.matcher(lower).replaceAll(" ")
+            if (promoBlockers.any { withoutLinks.contains(it) }) return null
+        }
 
-        val amountPaise = extractAmountPaise(text) ?: return null
+        val amountPaise = (extractAmountPaise(text) ?: bareDebitedAmount(text)) ?: return null
         if (amountPaise <= 0) return null
 
         val merchantRaw = extractMerchant(text) ?: sender.ifBlank { "Unknown" }
@@ -527,6 +582,30 @@ object SmsDebitParser {
         )
     }
 
+    /** BoB "Rs.200.00 Dr. from A/C … and Cr. to abc@ybl" — Dr. right after the amount. */
+    fun parseAmountDrFrom(body: String, sender: String = ""): ParsedDebit? {
+        val text = body.replace('\n', ' ').trim()
+        val m = amountDrFromPattern.matcher(text)
+        if (!m.find()) return null
+        val amountPaise = rupeesToPaise(m.group(1)) ?: return null
+        val payee = crToPayeePattern.matcher(text).let { pm ->
+            if (pm.find()) pm.group(1)?.trim()?.trimEnd('.', ',', ';', ' ')?.trim() else null
+        }?.takeIf { it.length >= 2 && isAcceptableMerchant(it, text, 0) }
+        val merchantRaw = payee ?: sender.ifBlank { "Unknown" }
+        return ParsedDebit(
+            amountPaise = amountPaise,
+            merchantRaw = merchantRaw.take(80),
+            merchantKey = normalizeMerchantKey(merchantRaw),
+        )
+    }
+
+    /** Fallback when no amount carries Rs/INR/₹: "debited by 50.0". */
+    private fun bareDebitedAmount(text: String): Long? {
+        val m = bareDebitedAmountPattern.matcher(text)
+        if (!m.find()) return null
+        return rupeesToPaise(m.group(1))
+    }
+
     fun isNeftCreditedToPayee(body: String): Boolean =
         parseNeftCreditedToPayee(body) != null
 
@@ -535,9 +614,7 @@ object SmsDebitParser {
         val text = body.replace('\n', ' ').trim()
         val m = accountDrDebitPattern.matcher(text)
         if (!m.find()) return null
-        val rupees = m.group(1)?.replace(",", "")?.toDoubleOrNull() ?: return null
-        val amountPaise = Math.round(rupees * 100.0)
-        if (amountPaise <= 0) return null
+        val amountPaise = rupeesToPaise(m.group(1)) ?: return null
         val payee = accountDrPayeePattern.matcher(text).let { pm ->
             if (pm.find()) pm.group(1)?.trim()?.trimEnd('.', ',', ' ')?.trim() else null
         }?.takeIf { it.length >= 2 && isAcceptableMerchant(it, text, 0) }
@@ -691,9 +768,7 @@ object SmsDebitParser {
         var prevMatchEnd = 0
         while (matcher.find()) {
             val start = matcher.start()
-            val raw = matcher.group(1)?.replace(",", "") ?: continue
-            val rupees = raw.toDoubleOrNull() ?: continue
-            val paise = Math.round(rupees * 100.0)
+            val paise = rupeesToPaise(matcher.group(1)) ?: 0L
             // Context window never reaches past the previous amount, so "Avl Bal Rs X. Rs Y debited"
             // doesn't poison the second amount with the first one's balance context.
             val contextStart = (start - 28).coerceAtLeast(prevMatchEnd)
@@ -701,6 +776,7 @@ object SmsDebitParser {
             if (paise <= 0) continue
             val context = lower.substring(contextStart, start)
             if (badAmountContext.any { context.contains(it) }) continue
+            if (worthContext.matcher(context).find() && !spendWorthContext.matcher(context).find()) continue
             if (badAmountContextWords.matcher(context).find()) continue
             candidates += start to paise
         }
@@ -781,10 +857,21 @@ object SmsDebitParser {
                     ?.trimEnd('.', ',', ';', ' ')
                     ?.trim()
                     ?: continue
-                if (isAcceptableMerchant(value, text, m.start())) return value
+                val cleaned = cleanMerchant(value)
+                if (isAcceptableMerchant(cleaned, text, m.start())) return cleaned
             }
         }
         return null
+    }
+
+    private val merchantLeadNoise = Pattern.compile(
+        """(?i)^(?:VPA\s+|(?:a\s+)?(?:UPI\s+)?(?:txn|transaction|payment)\s+to\s+|UPI-\d+-)""",
+    )
+
+    /** "VPA swiggy@icici" → "swiggy@icici", "UPI txn to Rapido Bike" → "Rapido Bike", "UPI-4305…-AMAZON" → "AMAZON". */
+    private fun cleanMerchant(value: String): String {
+        val stripped = merchantLeadNoise.matcher(value).replaceFirst("").trim()
+        return stripped.ifEmpty { value }
     }
 
     /** Reject helpline numbers, currency fragments, and "SMS BLOCK … to <phone>" captures. */
@@ -794,6 +881,10 @@ object SmsDebitParser {
         if (currencyPrefix.matcher(value).find()) return false
         val digitsOnly = value.replace(Regex("""[\s\-]"""), "")
         if (barePhone.matcher(digitsOnly).matches()) return false
+        // "919951860002 Axis Bank" — helpline / block-number followed by the bank name.
+        if (leadingPhone.matcher(value).find()) return false
+        // A sentence that runs into an amount ("for a purchase worth Rs 1") is not a payee.
+        if (embeddedAmount.matcher(value).find()) return false
         val lower = value.lowercase(Locale.US)
         if (lower.endsWith("to block") || lower == "block") return false
         val contextStart = (matchStart - 48).coerceAtLeast(0)

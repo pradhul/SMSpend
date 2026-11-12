@@ -37,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
 import app.smspend.domain.CategoryIconNames
 import app.smspend.domain.SpendCategory
+import app.smspend.util.runCatchingCancellable
 
 object CategoryIcons {
     val Fallback: ImageVector = Icons.Outlined.Category
@@ -89,7 +90,7 @@ object CategoryIcons {
     }
 
     fun forKey(categoryKey: String, customIconName: String? = null): ImageVector =
-        runCatching {
+        runCatchingCancellable {
             when {
                 SpendCategory.isCustomKey(categoryKey) -> fromAllowlistName(customIconName)
                 else -> forPreset(SpendCategory.fromStored(categoryKey))

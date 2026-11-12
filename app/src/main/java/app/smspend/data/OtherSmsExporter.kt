@@ -16,6 +16,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import app.smspend.util.runCatchingCancellable
 
 class OtherSmsExporter(
     private val context: Context,
@@ -35,7 +36,7 @@ class OtherSmsExporter(
         if (txs.isEmpty()) {
             return OtherExportResult(count = 0, fileName = null, error = "No Other transactions")
         }
-        val fullById = runCatching { smsReader.readByIds(txs.map { it.smsId }) }
+        val fullById = runCatchingCancellable { smsReader.readByIds(txs.map { it.smsId }) }
             .getOrDefault(emptyMap())
         val iso = utcIsoFormatter()
         val fileName = dumpFileName("smspend-other")
@@ -80,7 +81,7 @@ class OtherSmsExporter(
      * Enriches with Room transaction fields when an SMS was already imported.
      */
     private suspend fun exportFullInbox(): OtherExportResult {
-        val messages = runCatching { smsReader.readSince(0L) }.getOrElse { e ->
+        val messages = runCatchingCancellable { smsReader.readSince(0L) }.getOrElse { e ->
             return OtherExportResult(
                 count = 0,
                 fileName = null,
@@ -130,7 +131,7 @@ class OtherSmsExporter(
 
     private fun writeDump(fileName: String, root: JSONObject, count: Int): OtherExportResult {
         val bytes = root.toString(2).toByteArray(Charsets.UTF_8)
-        val written = runCatching { writeToDownloads(fileName, bytes) }.getOrElse { e ->
+        val written = runCatchingCancellable { writeToDownloads(fileName, bytes) }.getOrElse { e ->
             return OtherExportResult(
                 count = count,
                 fileName = null,

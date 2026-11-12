@@ -1,5 +1,7 @@
 package app.smspend.ui
 
+import app.smspend.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -51,9 +53,9 @@ fun SmsPermissionBanner(
             color = Mute,
         )
         if (blocked) {
-            TextButton(onClick = onOpenSettings) { Text("Open app settings", color = MintDeep) }
+            TextButton(onClick = onOpenSettings) { Text(stringResource(R.string.sms_permission_banner_open_app_settings), color = MintDeep) }
         } else {
-            TextButton(onClick = onAllow) { Text("Allow SMS access", color = MintDeep) }
+            TextButton(onClick = onAllow) { Text(stringResource(R.string.sms_permission_banner_allow_sms_access), color = MintDeep) }
         }
     }
 }

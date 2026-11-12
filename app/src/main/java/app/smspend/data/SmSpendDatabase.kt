@@ -23,8 +23,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SelfTransferPairEntity::class,
         AiSmsVerdictEntity::class,
     ],
-    version = 12,
-    exportSchema = false,
+    version = 13,
+    exportSchema = true,
 )
 abstract class SmSpendDatabase : RoomDatabase() {
     abstract fun transactions(): TransactionDao
@@ -44,7 +44,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
     companion object {
         @Volatile private var instance: SmSpendDatabase? = null
 
-        private val MIGRATION_1_2 = object : Migration(1, 2) {
+        internal val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     """
@@ -58,7 +58,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_2_3 = object : Migration(2, 3) {
+        internal val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     """
@@ -75,7 +75,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_3_4 = object : Migration(3, 4) {
+        internal val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     """
@@ -94,7 +94,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_4_5 = object : Migration(4, 5) {
+        internal val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     """
@@ -114,7 +114,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_5_6 = object : Migration(5, 6) {
+        internal val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE transactions ADD COLUMN dedupKey TEXT NOT NULL DEFAULT ''",
@@ -125,7 +125,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_6_7 = object : Migration(6, 7) {
+        internal val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE transactions ADD COLUMN note TEXT NOT NULL DEFAULT ''",
@@ -151,7 +151,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_7_8 = object : Migration(7, 8) {
+        internal val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE transactions ADD COLUMN aiStatus TEXT NOT NULL DEFAULT 'DONE'",
@@ -181,7 +181,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_8_9 = object : Migration(8, 9) {
+        internal val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE transactions ADD COLUMN type TEXT NOT NULL DEFAULT 'DEBIT'",
@@ -201,7 +201,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_9_10 = object : Migration(9, 10) {
+        internal val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     """
@@ -265,7 +265,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
                             SET note = ?, statusTag = ?, cardLast4 = ?, sourceKey = ?, dedupKey = ?
                             WHERE id = ?
                             """.trimIndent(),
-                            arrayOf(userNote, status, cardLast4, sourceKey, newDedup, id),
+                            arrayOf<Any?>(userNote, status, cardLast4, sourceKey, newDedup, id),
                         )
                     }
                 }
@@ -304,7 +304,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
                             (sourceKey, decisionType, decision, decidedAt)
                             VALUES (?, ?, ?, ?)
                             """.trimIndent(),
-                            arrayOf(sourceKey, dtype, dval, decidedAt),
+                            arrayOf<Any?>(sourceKey, dtype, dval, decidedAt),
                         )
                     }
                 }
@@ -335,7 +335,7 @@ abstract class SmSpendDatabase : RoomDatabase() {
                             INSERT OR REPLACE INTO duplicate_decisions (pairKey, decision, decidedAt)
                             VALUES (?, ?, ?)
                             """.trimIndent(),
-                            arrayOf(key, decision, decidedAt),
+                            arrayOf<Any?>(key, decision, decidedAt),
                         )
                     }
                 }
@@ -398,6 +398,49 @@ abstract class SmSpendDatabase : RoomDatabase() {
             }
         }
 
+        /** v1.3.0: composite indexes for the hot range / lookup queries. Additive only. */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_transactions_category_occurredAt " +
+                        "ON transactions(category, occurredAt)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_transactions_type_occurredAt " +
+                        "ON transactions(type, occurredAt)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_transactions_amountPaise_occurredAt " +
+                        "ON transactions(amountPaise, occurredAt)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_transactions_merchantKey_type " +
+                        "ON transactions(merchantKey, type)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_learned_tx_decisions_decisionType_decision " +
+                        "ON learned_tx_decisions(decisionType, decision)",
+                )
+            }
+        }
+
+        /** Every migration, in order. Shared with the migration tests. */
+        val ALL_MIGRATIONS: Array<Migration>
+            get() = arrayOf(
+                MIGRATION_1_2,
+                MIGRATION_2_3,
+                MIGRATION_3_4,
+                MIGRATION_4_5,
+                MIGRATION_5_6,
+                MIGRATION_6_7,
+                MIGRATION_7_8,
+                MIGRATION_8_9,
+                MIGRATION_9_10,
+                MIGRATION_10_11,
+                MIGRATION_11_12,
+                MIGRATION_12_13,
+            )
+
         fun get(context: Context): SmSpendDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -405,19 +448,8 @@ abstract class SmSpendDatabase : RoomDatabase() {
                     SmSpendDatabase::class.java,
                     "smspend.db",
                 )
-                    .addMigrations(
-                        MIGRATION_1_2,
-                        MIGRATION_2_3,
-                        MIGRATION_3_4,
-                        MIGRATION_4_5,
-                        MIGRATION_5_6,
-                        MIGRATION_6_7,
-                        MIGRATION_7_8,
-                        MIGRATION_8_9,
-                        MIGRATION_9_10,
-                        MIGRATION_10_11,
-                        MIGRATION_11_12,
-                    )
+                    // No destructive fallback: a missing migration must fail loudly, never wipe spends.
+                    .addMigrations(*ALL_MIGRATIONS)
                     .build()
                     .also { instance = it }
             }

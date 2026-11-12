@@ -1,206 +1,30 @@
 package app.smspend.data
 
+import app.smspend.util.rupeesToPaise
 import app.smspend.domain.CategoryBucket
 import app.smspend.domain.PeriodAccounting
 import app.smspend.domain.RecurringDetector
 import app.smspend.domain.SpendCategory
 import app.smspend.util.DateRanges
 import app.smspend.util.InboxScanWindow
-import app.smspend.util.MonthWindow
+import androidx.room.withTransaction
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.regex.Pattern
 import kotlin.math.abs
 import app.smspend.notify.UpiNotificationParser
-
-data class CategorySpend(
-    val bucket: CategoryBucket,
-    val totalPaise: Long,
-    val txnCount: Int,
-    val merchants: List<String>,
-)
-
-data class ScanResult(
-    val scannedSms: Int,
-    val newTransactions: Int,
-    val newDebitTransactions: Int = newTransactions,
-)
-
-data class AiPassResult(
-    /** PENDING transactions considered by this pass. */
-    val pending: Int,
-    /** Transactions whose category Gemini set (or changed). */
-    val applied: Int,
-    /** Transactions resolved from merchant_memory without a Gemini call. */
-    val fromMemory: Int,
-    /** Transactions left PENDING because a Gemini call failed (retried next scan). */
-    val failed: Int,
-    val error: String? = null,
-)
-
-data class AiTriageResult(
-    /** Rejected SMS that passed the local candidate filter and had no cached verdict. */
-    val candidates: Int,
-    /** Candidates sent to Gemini this pass. */
-    val sent: Int,
-    /** Transactions inserted from AI verdicts. */
-    val inserted: Int,
-    /** New per-sender templates saved. */
-    val templatesLearned: Int,
-    val error: String? = null,
-)
-
-data class DuplicateFlagResult(
-    val flagged: Int,
-    val candidates: Int,
-    val error: String? = null,
-)
-
-data class OtherExportResult(
-    val count: Int,
-    val fileName: String?,
-    val error: String? = null,
-)
-
-data class RepairResult(
-    val removed: Int,
-    val fixed: Int,
-    /** Merchant confirmations + same-payee bank doubles removed by cross-source logic. */
-    val crossSourceRemoved: Int = 0,
-)
-
-data class SyncPeriodResult(
-    val scannedSms: Int,
-    val newTransactions: Int,
-    val repaired: Int,
-    val recategorized: Int,
-    val selfTransfersPaired: Int,
-    val duplicatePairs: List<DuplicatePairCandidate>,
-)
-
-sealed class WrongParseResult {
-    /** Transaction deleted; it won't be re-imported on rescans. */
-    data class Removed(val ruleSaved: Boolean) : WrongParseResult()
-
-    /** Gemini confirmed a real debit and corrected the amount/merchant. */
-    data class Fixed(val newAmountPaise: Long, val ruleSaved: Boolean) : WrongParseResult()
-
-    data object NotFound : WrongParseResult()
-}
-
-data class WidgetSnapshot(
-    val todaySpendPaise: Long,
-    val monthSpendPaise: Long,
-    val budgetPaise: Long?,
-    val topCategories: List<Pair<String, Long>>,
-)
-
-data class CategoryYtdTrend(
-    val bucket: CategoryBucket,
-    val monthTotals: List<Long>,
-    val ytdTotalPaise: Long,
-)
-
-data class CategoryMonthRank(
-    val bucket: CategoryBucket,
-    /** Sum across the Trends window (for ranking). */
-    val windowTotalPaise: Long,
-    val thisMonthPaise: Long,
-    val lastMonthPaise: Long,
-)
-
-data class MonthlySpendTrend(
-    val months: List<MonthWindow>,
-    val topKeys: List<String>,
-    val series: Map<String, List<Long>>,
-    val otherByMonth: List<Long>,
-    val ranks: List<CategoryMonthRank>,
-) {
-    val windowTotalPaise: Long
-        get() = ranks.sumOf { it.windowTotalPaise }
-
-    val thisMonthTotalPaise: Long
-        get() = ranks.sumOf { it.thisMonthPaise }
-}
-
-data class TrendsMerchantShare(
-    val merchantRaw: String,
-    val amountPaise: Long,
-)
-
-data class TrendsInsightHint(
-    val categoryLabel: String,
-    val thisMonthPaise: Long,
-    val lastMonthPaise: Long,
-    val topMerchants: List<TrendsMerchantShare>,
-    val thisMonthTxnCount: Int = 0,
-    val lastMonthTxnCount: Int = 0,
-)
-
-/** One spend row of the month report on the Exports page. */
-data class SpendReportRow(
-    val txId: Long,
-    val occurredAt: Long,
-    val merchant: String,
-    val categoryLabel: String,
-    val tags: List<String>,
-    val amountPaise: Long,
-) {
-    /** "What is this spending about" — category plus the user's own tags. */
-    val aboutText: String
-        get() = if (tags.isEmpty()) categoryLabel else "$categoryLabel · ${tags.joinToString(", ")}"
-}
-
-data class MonthSpendReport(
-    val month: MonthWindow,
-    val rows: List<SpendReportRow>,
-) {
-    val totalPaise: Long get() = rows.sumOf { it.amountPaise }
-}
-
-data class TagNetOffset(
-    val tag: String,
-    val creditPaise: Long,
-    val appliedPaise: Long,
-)
-
-data class TagNetResult(
-    val spends: List<CategorySpend>,
-    val offsets: List<TagNetOffset>,
-) {
-    val noticeLines: List<String>
-        get() = offsets.map { off ->
-            val amt = formatPaiseShort(off.appliedPaise)
-            "₹$amt credit tagged '${off.tag}' offset against spends"
-        }
-}
-
-data class CardBillBalance(
-    val billPaise: Long,
-    val cardSpendPaise: Long,
-) {
-    val notice: String
-        get() {
-            val bill = formatPaiseShort(billPaise)
-            val spend = formatPaiseShort(cardSpendPaise)
-            return "Card bill ₹$bill paid · ₹$spend card spends tracked this period"
-        }
-}
-
-private fun formatPaiseShort(paise: Long): String {
-    val rupees = paise / 100.0
-    return if (rupees >= 1000) {
-        String.format(java.util.Locale.US, "%,.0f", rupees)
-    } else if (rupees == rupees.toLong().toDouble()) {
-        rupees.toLong().toString()
-    } else {
-        String.format(java.util.Locale.US, "%.2f", rupees)
-    }
-}
+import app.smspend.util.runCatchingCancellable
+import app.smspend.data.SpendRules.shouldApplyToSimilar
+import app.smspend.data.SpendRules.resolvePeerSourceKey
+import app.smspend.data.SpendRules.nettedCategoryTotal
+import app.smspend.data.SpendRules.cardBillBalance
+import app.smspend.data.SpendRules.buildDuplicatePairCandidates
+import app.smspend.data.SpendRules.applyTagNetting
 
 class SpendRepository(
     private val db: SmSpendDatabase,
@@ -242,207 +66,45 @@ class SpendRepository(
         private const val ID_CHUNK = 500
 
         /**
-         * Build candidate pairs: same amount, within [windowMs], not already noted as duplicate.
-         * Prefer pairing earliest with each later match (one pair per later row per amount cluster).
-         * [excludedPairKeys] skips pairs the user marked as not duplicates.
+         * How far behind an incremental scan's window the maintenance passes look.
+         * Covers the widest pairing window (self/RD cross notes, 14 days) with margin,
+         * so incremental scans no longer walk the whole table.
          */
-        fun buildDuplicatePairCandidates(
-            txs: List<TransactionEntity>,
-            windowMs: Long = 24L * 60 * 60 * 1000,
-            excludedPairKeys: Set<String> = emptySet(),
-        ): List<DuplicatePairCandidate> {
-            val sorted = txs
-                .filter { it.isDebit() }
-                .sortedWith(compareBy({ it.occurredAt }, { it.id }))
-            val out = mutableListOf<DuplicatePairCandidate>()
-            val usedLater = mutableSetOf<Long>()
-            for (i in sorted.indices) {
-                val a = sorted[i]
-                if (a.isPossibleDuplicateNote()) continue
-                for (j in (i + 1) until sorted.size) {
-                    val b = sorted[j]
-                    if (b.id in usedLater) continue
-                    if (b.isPossibleDuplicateNote()) continue
-                    if (b.amountPaise != a.amountPaise) continue
-                    val dt = abs(b.occurredAt - a.occurredAt)
-                    if (dt > windowMs) break // sorted by time — further ones are farther
-                    // Skip identical dedupKey (already collapsed path) — still rare residual.
-                    if (a.dedupKey.isNotBlank() && a.dedupKey == b.dedupKey) continue
-                    val earlier = if (a.occurredAt <= b.occurredAt) a else b
-                    val later = if (a.occurredAt <= b.occurredAt) b else a
-                    val pairKey = DuplicateDecisionEntity.pairKeyFor(earlier, later)
-                    if (pairKey in excludedPairKeys) continue
-                    out += DuplicatePairCandidate(
-                        pairId = "${earlier.id}-${later.id}",
-                        earlierId = earlier.id,
-                        laterId = later.id,
-                        amountPaise = earlier.amountPaise,
-                        earlierSender = earlier.sender,
-                        laterSender = later.sender,
-                        earlierSnippet = earlier.bodySnippet,
-                        laterSnippet = later.bodySnippet,
-                        earlierMerchant = earlier.merchantRaw,
-                        laterMerchant = later.merchantRaw,
-                        earlierAt = earlier.occurredAt,
-                        laterAt = later.occurredAt,
-                        earlierNote = earlier.statusTag.trim().ifBlank { earlier.note },
-                        laterNote = later.statusTag.trim().ifBlank { later.note },
-                    )
-                    usedLater += later.id
-                }
-            }
-            return out
-        }
+        const val MAINTENANCE_LOOKBACK_MS = 31L * 24 * 60 * 60 * 1000
 
-        /**
-         * Net tagged credits against debits that share the same user tag within a range.
-         * System status tags never participate. Untagged credits stay in CREDITS.
-         */
-        fun applyTagNetting(
-            txs: List<TransactionEntity>,
-            normalizeCategory: (String) -> String = { it },
-        ): TagNetResult {
-            val net = PeriodAccounting.netPeriod(txs)
-            val spends = mutableListOf<CategorySpend>()
+        /** Incremental AI triage re-reads this far behind its watermark. */
+        const val TRIAGE_OVERLAP_MS = 10L * 60 * 1000
 
-            net.countableDebits
-                .groupBy { normalizeCategory(it.category) }
-                .forEach { (key, rows) ->
-                    if (key == SpendCategory.CREDITS.name) return@forEach
-                    val total = rows.sumOf { it.amountPaise }
-                    if (total <= 0L) return@forEach
-                    spends += CategorySpend(
-                        bucket = CategoryBucket.fromStored(key),
-                        totalPaise = total,
-                        txnCount = rows.size,
-                        merchants = rows.map { it.merchantRaw }.distinct().take(3),
-                    )
-                }
-
-            val residual = net.residualCredits
-            val residualTotal = residual.sumOf { it.amountPaise }
-            if (residualTotal > 0L) {
-                spends += CategorySpend(
-                    bucket = CategoryBucket.fromStored(SpendCategory.CREDITS.name),
-                    totalPaise = residualTotal,
-                    txnCount = residual.size,
-                    merchants = residual.map { it.merchantRaw }.distinct().take(3),
-                )
-            }
-
-            val offsets = mutableListOf<TagNetOffset>()
-            if (net.nettedPaise > 0L) {
-                val eligible = txs.filter { it.countsTowardTotals() }
-                val creditByTag = eligible
-                    .filter { it.isCredit() }
-                    .mapNotNull { tx ->
-                        tx.userTagOrNull()?.let { TransactionEntity.normalizeUserTag(it) to tx }
-                    }
-                    .groupBy({ it.first }, { it.second })
-                val debitByTag = net.countableDebits
-                    .mapNotNull { tx ->
-                        tx.userTagOrNull()?.let { TransactionEntity.normalizeUserTag(it) to tx }
-                    }
-                    .groupBy({ it.first }, { it.second })
-
-                for ((tagKey, creditRows) in creditByTag) {
-                    if (debitByTag[tagKey].orEmpty().isEmpty()) continue
-                    val creditTotal = creditRows.sumOf { it.amountPaise }
-                    val residualForTag = residual.filter { tx ->
-                        tx.userTagOrNull()?.let { TransactionEntity.normalizeUserTag(it) } == tagKey
-                    }.sumOf { it.amountPaise }
-                    val applied = creditTotal - residualForTag
-                    if (applied > 0L) {
-                        offsets += TagNetOffset(
-                            tag = creditRows.first().userTagOrNull() ?: tagKey,
-                            creditPaise = creditTotal,
-                            appliedPaise = applied,
-                        )
-                    }
-                }
-                if (offsets.isEmpty()) {
-                    offsets += TagNetOffset(
-                        tag = "credits",
-                        creditPaise = net.nettedPaise,
-                        appliedPaise = net.nettedPaise,
-                    )
-                }
-            }
-
-            return TagNetResult(
-                spends = spends.sortedByDescending { it.totalPaise },
-                offsets = offsets,
-            )
-        }
-
-        fun cardBillBalance(txs: List<TransactionEntity>): CardBillBalance? {
-            val billPaise = txs
-                .filter { it.isDebit() && it.isCardBillPaymentNote() }
-                .sumOf { it.amountPaise }
-            if (billPaise <= 0L) return null
-            val cardSpendPaise = txs
-                .filter { it.isDebit() && it.countsTowardTotals() && it.isCardSpend() }
-                .sumOf { it.amountPaise }
-            return CardBillBalance(billPaise = billPaise, cardSpendPaise = cardSpendPaise)
-        }
-
-        /**
-         * Bulk "apply to similar" is debit-only. Credits share a bank-label merchantKey
-         * when the payer can't be parsed, so bulk retag would hit every credit into that
-         * bank — and writing merchant memory for the bank key would keep re-applying it.
-         * Credits are always retagged one row at a time with no memory write.
-         */
-        fun shouldApplyToSimilar(tx: TransactionEntity, requested: Boolean): Boolean =
-            requested && tx.isDebit()
-
-        /**
-         * Given recorded duplicate pair keys (`"sourceA|sourceB"`, sorted halves), return the
-         * source key paired with [selfSourceKey], or null when no recorded pair involves it.
-         */
-        fun resolvePeerSourceKey(pairKeys: Collection<String>, selfSourceKey: String): String? {
-            if (selfSourceKey.isBlank()) return null
-            for (key in pairKeys) {
-                val parts = key.split("|")
-                if (parts.size != 2) continue
-                when (selfSourceKey) {
-                    parts[0] -> return parts[1]
-                    parts[1] -> return parts[0]
-                }
-            }
-            return null
-        }
-
-        /** Netted total for one category in a raw txn list (same rules as [applyTagNetting]). */
-        fun nettedCategoryTotal(
-            txs: List<TransactionEntity>,
-            categoryKey: String,
-            normalizeCategory: (String) -> String = { it },
-        ): Long {
-            val result = applyTagNetting(txs, normalizeCategory)
-            return result.spends.firstOrNull { it.bucket.key == categoryKey }?.totalPaise
-                ?: 0L
-        }
     }
+
+    /**
+     * Spends + notices for one period from a single netting pass. Mapping runs on
+     * [Dispatchers.Default] so large months don't jank the UI thread.
+     */
+    fun observeRangeSummary(
+        startMs: Long,
+        endMs: Long = DateRanges.OPEN_END_MS,
+    ): Flow<RangeSummary> =
+        txDao.observeInRange(startMs, endMs).map { list ->
+            val net = applyTagNetting(list) { normalizeCategoryKey(it) }
+            RangeSummary(
+                spends = net.spends,
+                notices = buildList {
+                    addAll(net.noticeLines)
+                    cardBillBalance(list)?.let { add(it.notice) }
+                },
+            )
+        }.flowOn(Dispatchers.Default)
 
     fun observeRangeByCategory(
         startMs: Long,
-        endMs: Long = DateRanges.endExclusiveNow(),
-    ): Flow<List<CategorySpend>> =
-        txDao.observeInRange(startMs, endMs).map { list ->
-            applyTagNetting(list) { normalizeCategoryKey(it) }.spends
-        }
+        endMs: Long = DateRanges.OPEN_END_MS,
+    ): Flow<List<CategorySpend>> = observeRangeSummary(startMs, endMs).map { it.spends }
 
     fun observeRangeNotices(
         startMs: Long,
-        endMs: Long = DateRanges.endExclusiveNow(),
-    ): Flow<List<String>> =
-        txDao.observeInRange(startMs, endMs).map { list ->
-            val net = applyTagNetting(list) { normalizeCategoryKey(it) }
-            buildList {
-                addAll(net.noticeLines)
-                cardBillBalance(list)?.let { add(it.notice) }
-            }
-        }
+        endMs: Long = DateRanges.OPEN_END_MS,
+    ): Flow<List<String>> = observeRangeSummary(startMs, endMs).map { it.notices }
 
     /** Netted total for a category in range (matches Home category cards). */
     fun observeCategoryNettedTotal(
@@ -452,7 +114,7 @@ class SpendRepository(
     ): Flow<Long> =
         txDao.observeInRange(startMs, endMs).map { list ->
             nettedCategoryTotal(list, categoryKey) { normalizeCategoryKey(it) }
-        }
+        }.flowOn(Dispatchers.Default)
 
     fun observeCategoryNettingNotice(
         categoryKey: String,
@@ -472,12 +134,12 @@ class SpendRepository(
             if (relevant.isEmpty()) null else relevant.joinToString(" · ") {
                 "₹${formatPaiseShort(it.appliedPaise)} credit tagged '${it.tag}' offset"
             }
-        }
+        }.flowOn(Dispatchers.Default)
 
     @Deprecated("Use observeRangeByCategory", ReplaceWith("observeRangeByCategory(weekStartMs, weekEndMs)"))
     fun observeWeekByCategory(
         weekStartMs: Long = DateRanges.startOfThisWeekMs(),
-        weekEndMs: Long = DateRanges.endExclusiveNow(),
+        weekEndMs: Long = DateRanges.OPEN_END_MS,
     ): Flow<List<CategorySpend>> = observeRangeByCategory(weekStartMs, weekEndMs)
 
     fun observeCategoryIconNames(): Flow<Map<String, String>> =
@@ -497,7 +159,7 @@ class SpendRepository(
         val apiKey = prefs.geminiApiKey.first()
         if (apiKey.isBlank()) return
         val label = SpendCategory.displayLabel(categoryKey)
-        val name = runCatching { gemini.suggestIconName(apiKey, label) }.getOrNull() ?: return
+        val name = runCatchingCancellable { gemini.suggestIconName(apiKey, label) }.getOrNull() ?: return
         iconDao.upsert(
             CategoryIconEntity(
                 categoryKey = categoryKey,
@@ -515,11 +177,11 @@ class SpendRepository(
     fun observeCategoryTxns(
         categoryKey: String,
         weekStartMs: Long = DateRanges.startOfThisWeekMs(),
-        weekEndMs: Long = DateRanges.endExclusiveNow(),
+        weekEndMs: Long = DateRanges.OPEN_END_MS,
     ): Flow<List<TransactionEntity>> =
         txDao.observeInRange(weekStartMs, weekEndMs).map { list ->
             list.filter { normalizeCategoryKey(it.category) == categoryKey }
-        }
+        }.flowOn(Dispatchers.Default)
 
     fun observeExpectedSoon(withinDays: Int = 7): Flow<List<RecurringMerchantEntity>> {
         val until = System.currentTimeMillis() + withinDays * 24L * 60 * 60 * 1000
@@ -944,6 +606,9 @@ class SpendRepository(
             ),
         )
 
+        // One write transaction for the whole batch: atomic, and Room flows (Home) re-emit
+        // once per scan instead of once per inserted row.
+        db.withTransaction {
         for (sms in messages) {
             maxDate = maxOf(maxDate, sms.dateMs)
             val senderRules = rulesBySender[SmsDebitParser.senderKey(sms.sender)].orEmpty()
@@ -1028,16 +693,21 @@ class SpendRepository(
         )
         // Reversals don't insert a row, so this has to run even when nothing was stored.
         purgeAtmReversals(messages)
-        // Full-table repair is expensive. Skip it when this pass only re-read the
-        // overlap and stored nothing — those rows were already repaired.
-        val deepClean = forceFullMonth || sinceOverrideMs != null || inserted > 0 ||
-            meta == null || meta.lastSmsDateMs <= 0L
+        }
+        // Skip maintenance when this pass only re-read the overlap and stored nothing —
+        // those rows were already cleaned. Incremental scans (one new SMS) only clean a
+        // recent window; first/forced/period scans clean the whole table.
+        val fullPass = forceFullMonth || sinceOverrideMs != null || meta == null || meta.lastSmsDateMs <= 0L
+        val deepClean = fullPass || inserted > 0
         if (deepClean) {
-            // Clean already-stored merchant confirmations / same-payee bank doubles.
-            purgeCrossSourceDuplicates()
-            repairHighConfidenceCategories()
-            applySelfRdCrossNotes()
-            applyCreditPairSelfTransfers(since)
+            val windowStart = if (fullPass) null else since - MAINTENANCE_LOOKBACK_MS
+            db.withTransaction {
+                // Clean already-stored merchant confirmations / same-payee bank doubles.
+                purgeCrossSourceDuplicatesLocked(windowStart)
+                repairHighConfidenceCategories(windowStart)
+                applySelfRdCrossNotesLocked(windowStart = windowStart)
+                applyCreditPairSelfTransfersLocked(since)
+            }
         }
         DiagLog.i(
             "scan",
@@ -1318,7 +988,7 @@ class SpendRepository(
     suspend fun syncPeriod(startMs: Long, endMs: Long = DateRanges.endExclusiveNow()): SyncPeriodResult {
         val scan = scanInbox(forceFullMonth = true, sinceOverrideMs = startMs)
         val repair = repairTransactions()
-        val triage = runCatching { runAiTriagePass() }.getOrNull()
+        val triage = runCatchingCancellable { runAiTriagePass() }.getOrNull()
         val ai = runAiCategorizationPass()
         val pairs = findDuplicatePairCandidates()
             .filter { pair ->
@@ -1338,7 +1008,7 @@ class SpendRepository(
 
     /** Detect banks from inbox senders for My banks pre-selection. */
     suspend fun detectMyBanksFromInbox(sinceMs: Long = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1)): Set<String> {
-        val messages = runCatching { smsReader.readSince(sinceMs) }.getOrDefault(emptyList())
+        val messages = runCatchingCancellable { smsReader.readSince(sinceMs) }.getOrDefault(emptyList())
         return app.smspend.domain.IndianBanks.detectFromSenders(messages.map { it.sender })
     }
 
@@ -1347,13 +1017,16 @@ class SpendRepository(
      */
     suspend fun backfillCreditsForMyBanks(
         sinceMs: Long = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1),
-    ): Int {
+    ): Int = scanMutex.withLock { backfillCreditsForMyBanksLocked(sinceMs) }
+
+    private suspend fun backfillCreditsForMyBanksLocked(sinceMs: Long): Int {
         val myBankIds = app.smspend.domain.IndianBanks.parseIdsCsv(prefs.myBankIds.first())
         if (myBankIds.isEmpty()) return 0
         val messages = smsReader.readSince(sinceMs)
         val rulesBySender = ruleDao.listAll().groupBy { it.senderKey }
         val seenDedupKeys = txDao.listDedupKeys().toMutableSet()
         var inserted = 0
+        db.withTransaction {
         for (sms in messages) {
             val sourceKey = TransactionEntity.sourceKeyForSms(sms.id)
             if (learnedDao.get(sourceKey, LearnedTxDecisionEntity.TYPE_REMOVED_DUPLICATE)?.decision ==
@@ -1393,25 +1066,28 @@ class SpendRepository(
                 seenDedupKeys += key
             }
         }
+        }
         return inserted
     }
 
     /** Called after the user saves My banks — backfill credits and re-run pairing. */
-    suspend fun onMyBanksSaved() {
-        backfillCreditsForMyBanks()
-        applyCreditPairSelfTransfers(DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1))
+    suspend fun onMyBanksSaved() = scanMutex.withLock {
+        val since = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1)
+        backfillCreditsForMyBanksLocked(since)
+        db.withTransaction { applyCreditPairSelfTransfersLocked(since) }
     }
 
     suspend fun listCustomCategoryKeys(): List<String> =
-        txDao.listAll()
-            .map { normalizeCategoryKey(it.category) }
+        txDao.listDistinctCategories()
+            .map { normalizeCategoryKey(it) }
             .filter { SpendCategory.isCustomKey(it) }
             .distinct()
             .sorted()
 
     /** Delete later rows of duplicate pairs; returns how many were removed. */
-    suspend fun removeDuplicateLaters(laterIds: Collection<Long>): Int {
+    suspend fun removeDuplicateLaters(laterIds: Collection<Long>): Int = scanMutex.withLock {
         var removed = 0
+        db.withTransaction {
         for (id in laterIds.distinct()) {
             val later = txDao.getById(id) ?: continue
             findNearbyDuplicatePeers(later).firstOrNull()?.let { earlier ->
@@ -1432,7 +1108,8 @@ class SpendRepository(
             txDao.deleteById(id)
             removed++
         }
-        return removed
+        }
+        removed
     }
 
     /** Record that a review-sheet pair is not a duplicate (learn for next time). */
@@ -1555,22 +1232,21 @@ class SpendRepository(
             .mapNotNull { extractPaiseWithRegex(it.pattern, body) }
             .firstOrNull()
 
-    private fun safeRegexMatch(pattern: String, body: String): Boolean =
-        runCatching {
-            Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(body).find()
-        }.getOrDefault(false)
+    /** Cached, length-capped, time-boxed — see [SafeRegex]. */
+    private fun safeRegexMatch(pattern: String, body: String): Boolean = SafeRegex.find(pattern, body)
 
     private fun extractPaiseWithRegex(pattern: String, body: String): Long? =
-        runCatching {
-            val m = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(body)
+        SafeRegex.withMatcher(pattern, body) { m ->
             if (m.find() && m.groupCount() >= 1) {
-                m.group(1)?.replace(",", "")?.toDoubleOrNull()
-                    ?.takeIf { it > 0 }
-                    ?.let { Math.round(it * 100.0) }
+                rupeesToPaise(m.group(1))
             } else {
                 null
             }
-        }.getOrNull()
+        }
+
+    /** Saved rules must be cheap to run and specific to a format, not just "any SMS". */
+    private fun isSaveableRule(pattern: String): Boolean =
+        SafeRegex.isSafe(pattern) && AiSmsTriage.longestLiteralRun(pattern) >= AiSmsTriage.MIN_LITERAL_ANCHOR
 
     /**
      * Re-runs the (current) parser over every stored transaction: rows the parser now
@@ -1578,14 +1254,23 @@ class SpendRepository(
      * dedupKey, removes duplicate transactions (same key), and purges cross-source
      * merchant confirmations / same-payee bank doubles.
      */
-    suspend fun repairTransactions(): RepairResult {
+    suspend fun repairTransactions(): RepairResult = scanMutex.withLock { repairTransactionsLocked() }
+
+    private suspend fun repairTransactionsLocked(): RepairResult {
+        // Full re-parse is the one pass that genuinely needs every row.
         val all = txDao.listAll()
-        val fullSmsById = runCatching { smsReader.readByIds(all.map { it.smsId }) }
+        val fullSmsById = runCatchingCancellable { smsReader.readByIds(all.map { it.smsId }) }
             .getOrDefault(emptyMap())
+        // Inbox reads happen before the write transaction so it isn't held during IO.
+        val atmMessages = runCatchingCancellable {
+            smsReader.readSince(DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1))
+        }.getOrDefault(emptyList())
         val rulesBySender = ruleDao.listAll().groupBy { it.senderKey }
         val myBankIds = app.smspend.domain.IndianBanks.parseIdsCsv(prefs.myBankIds.first())
         var removed = 0
         var fixed = 0
+        var crossSourceRemoved = 0
+        db.withTransaction {
         for (tx in all) {
             val full = fullSmsById[tx.smsId]
             val body = full?.body?.takeIf { it.isNotBlank() } ?: tx.bodySnippet
@@ -1702,8 +1387,7 @@ class SpendRepository(
         }
 
         // Collapse duplicates: same dedupKey → keep the earliest row (lowest id).
-        val remaining = txDao.listAll()
-            .filter { it.dedupKey.isNotBlank() }
+        val remaining = txDao.listRowsWithSharedDedupKey()
             .groupBy { it.dedupKey }
         for ((_, group) in remaining) {
             if (group.size <= 1) continue
@@ -1715,12 +1399,13 @@ class SpendRepository(
             }
         }
 
-        val crossSourceRemoved = purgeCrossSourceDuplicates()
+        crossSourceRemoved = purgeCrossSourceDuplicatesLocked(null)
         removed += crossSourceRemoved
-        removed += purgeAtmReversalsFromInbox(DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1))
-        fixed += repairHighConfidenceCategories()
-        applySelfRdCrossNotes()
-        applyCreditPairSelfTransfers(DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1))
+        removed += purgeAtmReversals(atmMessages)
+        fixed += repairHighConfidenceCategories(null)
+        applySelfRdCrossNotesLocked(windowStart = null)
+        applyCreditPairSelfTransfersLocked(DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1))
+        }
         return RepairResult(
             removed = removed,
             fixed = fixed,
@@ -1730,19 +1415,18 @@ class SpendRepository(
 
     /**
      * Marks ATM Withdrawn rows that have a matching "ATM Txn Reversed" SMS as failed withdrawals
-     * (keeps the row with note) instead of deleting them.
+     * (keeps the row with note) instead of deleting them. Only withdrawals near the reversal
+     * dates are loaded.
      */
-    private suspend fun purgeAtmReversalsFromInbox(sinceMs: Long): Int {
-        val messages = runCatching { smsReader.readSince(sinceMs) }.getOrDefault(emptyList())
-        return purgeAtmReversals(messages)
-    }
-
     private suspend fun purgeAtmReversals(messages: List<RawSms>): Int {
         val reversals = messages.mapNotNull { sms ->
             SmsDebitParser.parseAtmReversal(sms.body)?.let { it to sms.dateMs }
         }
         if (reversals.isEmpty()) return 0
-        val withdrawals = txDao.listAll()
+        val window = SmsDebitParser.ATM_REVERSAL_WINDOW_MS
+        val from = reversals.minOf { it.second } - window
+        val to = reversals.maxOf { it.second } + window + 1
+        val withdrawals = txDao.listInRange(from, to)
             .filter { SmsDebitParser.isAtmWithdrawal(it.bodySnippet, it.merchantKey) }
             .filter { !it.isAtmFailed() }
             .map {
@@ -1806,8 +1490,16 @@ class SpendRepository(
      */
     suspend fun applySelfRdCrossNotes(
         windowMs: Long = SmsDebitParser.SELF_RD_CROSS_NOTE_WINDOW_MS,
+    ): Int = scanMutex.withLock {
+        db.withTransaction { applySelfRdCrossNotesLocked(windowMs, windowStart = null) }
+    }
+
+    /** [windowStart] null = whole table; otherwise only rows from that time on. */
+    private suspend fun applySelfRdCrossNotesLocked(
+        windowMs: Long = SmsDebitParser.SELF_RD_CROSS_NOTE_WINDOW_MS,
+        windowStart: Long?,
     ): Int {
-        val all = txDao.listAll()
+        val all = if (windowStart == null) txDao.listAll() else txDao.listInRange(windowStart, DateRanges.OPEN_END_MS)
         val selfs = all.filter { SpendCategory.isSelfTransfer(it.category) }
         val savings = all.filter {
             !SpendCategory.isCustomKey(it.category) &&
@@ -1838,7 +1530,11 @@ class SpendRepository(
      * Pair credits *to* My banks with debits to mark Self transfer.
      * Only untouched CREDITS rows are auto-paired; user retags / TYPE_SELF_TRANSFER NO decisions win.
      */
-    suspend fun applyCreditPairSelfTransfers(sinceMs: Long): Int {
+    suspend fun applyCreditPairSelfTransfers(sinceMs: Long): Int = scanMutex.withLock {
+        db.withTransaction { applyCreditPairSelfTransfersLocked(sinceMs) }
+    }
+
+    private suspend fun applyCreditPairSelfTransfersLocked(sinceMs: Long): Int {
         val bankIds = app.smspend.domain.IndianBanks.parseIdsCsv(prefs.myBankIds.first())
         if (bankIds.isEmpty()) return 0
         val blockedSelf = learnedDao
@@ -1853,7 +1549,7 @@ class SpendRepository(
         bankIds: Set<String>,
         blockedSelf: Set<String>,
     ): Int {
-        val range = txDao.listInRange(sinceMs, DateRanges.endExclusiveNow())
+        val range = txDao.listInRange(sinceMs, DateRanges.OPEN_END_MS)
         val creditTxs = range.filter {
             it.isCredit() &&
                 SpendCategory.isCredits(it.category) &&
@@ -1862,7 +1558,7 @@ class SpendRepository(
         }
         if (creditTxs.isEmpty()) {
             // Fallback: parse from inbox when credits are not yet stored (legacy scans).
-            val messages = runCatching { smsReader.readSince(sinceMs) }.getOrDefault(emptyList())
+            val messages = runCatchingCancellable { smsReader.readSince(sinceMs) }.getOrDefault(emptyList())
             val credits = messages.mapNotNull { sms ->
                 CreditSmsParser.parseCredit(sms.body, sms.sender, sms.dateMs)
             }
@@ -1896,21 +1592,20 @@ class SpendRepository(
         bankIds: Set<String>,
         blockedSelf: Set<String>,
     ): Int {
-        val all = txDao.listAll()
-        val ownAccounts = all.mapNotNull { tx ->
-            val bank = app.smspend.domain.IndianBanks.matchSender(tx.sender)?.id
+        // Light projection (sender/snippet/type) instead of loading every full row.
+        val ownAccounts = txDao.listAccountEvidence().mapNotNull { ev ->
+            val bank = app.smspend.domain.IndianBanks.matchSender(ev.sender)?.id
             if (bank == null || bank !in bankIds) return@mapNotNull null
-            if (tx.isCredit()) {
-                SmsDebitParser.extractCreditedAccount(tx.bodySnippet)
+            if (ev.type.equals(TransactionEntity.TYPE_CREDIT, ignoreCase = true)) {
+                SmsDebitParser.extractCreditedAccount(ev.bodySnippet)
             } else {
-                SmsDebitParser.extractDebitedAccount(tx.bodySnippet)
+                SmsDebitParser.extractDebitedAccount(ev.bodySnippet)
             }
         }.toSet()
         if (ownAccounts.isEmpty()) return 0
         val correctedKeys = correctionDao.listMerchantKeys().toSet()
         var tagged = 0
-        for (tx in all) {
-            if (tx.occurredAt < sinceMs) continue
+        for (tx in txDao.listInRange(sinceMs, DateRanges.OPEN_END_MS)) {
             if (!tx.isDebit()) continue
             if (SpendCategory.isCustomKey(tx.category)) continue
             val cat = SpendCategory.fromStored(tx.category)
@@ -2022,9 +1717,14 @@ class SpendRepository(
      * ledger debit exists, and collapses opaque NEFT "Amt Deducted" legs when a named
      * "credited to payee" leg exists. Returns how many rows were removed.
      */
-    suspend fun purgeCrossSourceDuplicates(): Int {
-        val all = txDao.listAll()
-        val points = all.filter { it.isDebit() }.map { tx ->
+    suspend fun purgeCrossSourceDuplicates(): Int = scanMutex.withLock {
+        db.withTransaction { purgeCrossSourceDuplicatesLocked(null) }
+    }
+
+    /** [windowStart] null = all debits; otherwise debits from that time on. */
+    private suspend fun purgeCrossSourceDuplicatesLocked(windowStart: Long?): Int {
+        val debits = txDao.listDebitsInRange(windowStart ?: Long.MIN_VALUE, DateRanges.OPEN_END_MS)
+        val points = debits.filter { it.isDebit() }.map { tx ->
             CrossSourcePoint(
                 id = tx.id,
                 amountPaise = tx.amountPaise,
@@ -2071,7 +1771,7 @@ class SpendRepository(
      * Transfer-To-RD→Savings, opaque NEFT→Bank transfer / Transfers, self-name→Self,
      * jewellery→Shopping. Also normalizes opaque Online Banking merchant labels.
      */
-    private suspend fun repairHighConfidenceCategories(): Int {
+    private suspend fun repairHighConfidenceCategories(windowStart: Long?): Int {
         val aliases = prefs.selfNameAliases.first()
         val correctedKeys = correctionDao.listMerchantKeys().toSet()
         val notCardBill = learnedDao
@@ -2083,7 +1783,8 @@ class SpendRepository(
         val notSelfTransfer = learnedDao
             .listKeys(LearnedTxDecisionEntity.TYPE_SELF_TRANSFER, LearnedTxDecisionEntity.NO)
             .toSet()
-        val all = txDao.listAll()
+        // Credits are skipped below, so only debits are loaded.
+        val all = txDao.listDebitsInRange(windowStart ?: Long.MIN_VALUE, DateRanges.OPEN_END_MS)
         var fixed = 0
         val retaggedMerchants = mutableSetOf<String>()
 
@@ -2179,7 +1880,7 @@ class SpendRepository(
     suspend fun markNotTransaction(transactionId: Long): Int? = scanMutex.withLock {
         val tx = txDao.getById(transactionId) ?: return null
         val senderKey = SmsDebitParser.senderKey(tx.sender)
-        val body = runCatching { smsReader.readByIds(listOf(tx.smsId))[tx.smsId]?.body }
+        val body = runCatchingCancellable { smsReader.readByIds(listOf(tx.smsId))[tx.smsId]?.body }
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
             ?: tx.bodySnippet
@@ -2224,7 +1925,7 @@ class SpendRepository(
         val ai = if (apiKey.isBlank()) {
             null
         } else {
-            runCatching { gemini.reparse(apiKey, tx.bodySnippet, tx.sender) }.getOrNull()
+            runCatchingCancellable { gemini.reparse(apiKey, tx.bodySnippet, tx.sender) }.getOrNull()
         }
 
         if (ai != null && ai.isDebit && ai.amountPaise != null) {
@@ -2245,7 +1946,7 @@ class SpendRepository(
             txDao.updateAiStatusForIds(listOf(tx.id), TransactionEntity.AI_PENDING)
             var ruleSaved = false
             val regex = ai.amountRegex
-            if (regex != null && extractPaiseWithRegex(regex, tx.bodySnippet) == ai.amountPaise) {
+            if (regex != null && isSaveableRule(regex) && extractPaiseWithRegex(regex, tx.bodySnippet) == ai.amountPaise) {
                 ruleDao.insert(
                     ParseRuleEntity(
                         senderKey = senderKey,
@@ -2270,7 +1971,7 @@ class SpendRepository(
         )
         var ruleSaved = false
         val ignoreRegex = ai?.ignoreRegex
-        if (ignoreRegex != null && safeRegexMatch(ignoreRegex, tx.bodySnippet)) {
+        if (ignoreRegex != null && isSaveableRule(ignoreRegex) && safeRegexMatch(ignoreRegex, tx.bodySnippet)) {
             ruleDao.insert(
                 ParseRuleEntity(
                     senderKey = senderKey,
@@ -2537,7 +2238,7 @@ class SpendRepository(
             sender = tx.sender,
             bodySnippet = tx.bodySnippet,
         )
-        val (mapped, _) = runCatching {
+        val (mapped, _) = runCatchingCancellable {
             gemini.categorizeTransactions(
                 apiKey = apiKey,
                 items = listOf(item),
@@ -2561,16 +2262,29 @@ class SpendRepository(
      * verdict is cached, and validated per-sender templates are saved so the next SMS in that
      * format parses locally.
      */
-    suspend fun runAiTriagePass(): AiTriageResult = triageMutex.withLock {
+    /**
+     * [incremental] = true (the per-SMS worker / quiet catch-up) only looks at SMS that
+     * arrived since the last completed pass, so a new bank SMS doesn't re-filter two
+     * months of inbox. A full pass (pull-to-refresh, period sync) still covers the
+     * whole Home window and retries anything an earlier pass couldn't send.
+     */
+    suspend fun runAiTriagePass(incremental: Boolean = false): AiTriageResult = triageMutex.withLock {
         val apiKey = prefs.geminiApiKey.first()
         if (apiKey.isBlank() || !prefs.aiTriageEnabled.first()) {
             return AiTriageResult(0, 0, 0, 0)
         }
-        val sinceMs = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1)
-        val messages = runCatching { smsReader.readSince(sinceMs) }.getOrDefault(emptyList())
+        val homeStart = DateRanges.startOfMonthMs(DateRanges.HOME_MONTH_COUNT - 1)
+        val watermark = prefs.aiTriageWatermarkMs.first()
+        val sinceMs = if (incremental && watermark > 0L) {
+            maxOf(homeStart, watermark - TRIAGE_OVERLAP_MS)
+        } else {
+            homeStart
+        }
+        val messages = runCatchingCancellable { smsReader.readSince(sinceMs) }.getOrDefault(emptyList())
         if (messages.isEmpty()) return AiTriageResult(0, 0, 0, 0)
+        val newestRead = messages.maxOf { it.dateMs }
 
-        val storedSmsIds = txDao.listAll().mapTo(HashSet()) { it.smsId }
+        val storedSmsIds = txDao.listSmsIdsSince(sinceMs).toHashSet()
         val judged = verdictDao.listSmsIds().toHashSet()
         val rulesBySender = ruleDao.listAll().groupBy { it.senderKey }
         val candidates = messages.asSequence()
@@ -2588,7 +2302,8 @@ class SpendRepository(
             .sortedByDescending { it.dateMs }
             .toList()
         if (candidates.isEmpty()) {
-            DiagLog.i("ai", "triage_skip", mapOf("reason" to "no_candidates"))
+            DiagLog.i("ai", "triage_skip", mapOf("reason" to "no_candidates", "incremental" to incremental))
+            prefs.setAiTriageWatermarkMs(maxOf(watermark, newestRead))
             return AiTriageResult(0, 0, 0, 0)
         }
 
@@ -2611,6 +2326,7 @@ class SpendRepository(
         var inserted = 0
         var learned = 0
         scanMutex.withLock {
+            db.withTransaction {
             val state = newInsertState(sinceMs)
             val myBankIds = app.smspend.domain.IndianBanks.parseIdsCsv(prefs.myBankIds.first())
             val existingTemplates = ruleDao.listAll()
@@ -2688,9 +2404,15 @@ class SpendRepository(
                 DiagLog.i("ai", "template_learned", mapOf("sender" to sms.sender, "kind" to ruleKind))
             }
             if (inserted > 0) {
-                purgeCrossSourceDuplicates()
-                applyCreditPairSelfTransfers(sinceMs)
+                purgeCrossSourceDuplicatesLocked(sinceMs - MAINTENANCE_LOOKBACK_MS)
+                applyCreditPairSelfTransfersLocked(sinceMs)
             }
+            }
+        }
+        // Only advance past SMS that were all sent and answered; otherwise the next
+        // pass picks the leftovers up again (verdicts are cached, so nothing repeats).
+        if (firstError == null && toSend.size == candidates.size) {
+            prefs.setAiTriageWatermarkMs(maxOf(watermark, newestRead))
         }
         val result = AiTriageResult(candidates.size, toSend.size, inserted, learned, firstError)
         DiagLog.i(
@@ -3047,16 +2769,13 @@ class SpendRepository(
             .listPairKeysByDecision(DuplicateDecisionEntity.DUPLICATE)
             .toSet()
         if (duplicateKeys.isEmpty()) return 0
-        val all = txDao.listAll()
-        val byKey = all.associateBy {
-            it.dedupKey.ifBlank { "sms:${it.smsId}" }
-        }
         var flagged = 0
         for (pairKey in duplicateKeys) {
             val parts = pairKey.split("|")
             if (parts.size != 2) continue
-            val a = byKey[parts[0]] ?: continue
-            val b = byKey[parts[1]] ?: continue
+            // Pair keys are immutable source keys ("sms:<id>"), so look rows up by those.
+            val a = findBySourceKey(parts[0]) ?: continue
+            val b = findBySourceKey(parts[1]) ?: continue
             val later = if (a.occurredAt <= b.occurredAt) b else a
             if (later.statusTag.isBlank() || later.isPossibleDuplicateNote()) {
                 txDao.updateStatusTag(later.id, GeminiCategorizer.DUPLICATE_NOTE)
@@ -3064,6 +2783,12 @@ class SpendRepository(
             }
         }
         return flagged
+    }
+
+    private suspend fun findBySourceKey(key: String): TransactionEntity? {
+        txDao.getBySourceKey(key)?.let { return it }
+        val smsId = key.removePrefix("sms:").takeIf { it != key }?.toLongOrNull() ?: return null
+        return txDao.getBySmsId(smsId)
     }
 
     /**
@@ -3078,14 +2803,14 @@ class SpendRepository(
         val excluded = decisionDao
             .listPairKeysByDecision(DuplicateDecisionEntity.NOT_DUPLICATE)
             .toSet()
-        val all = txDao.listAll().sortedBy { it.occurredAt }
+        val all = txDao.listDebitsInRange(Long.MIN_VALUE, DateRanges.OPEN_END_MS).sortedBy { it.occurredAt }
         val pairs = buildDuplicatePairCandidates(all, windowMs, excluded)
         if (pairs.isEmpty()) return pairs
         val byId = all.associateBy { it.id }
         val smsIds = pairs.flatMap { pair ->
             listOfNotNull(byId[pair.earlierId]?.smsId, byId[pair.laterId]?.smsId)
         }.distinct()
-        val fullById = runCatching { smsReader.readByIds(smsIds) }.getOrDefault(emptyMap())
+        val fullById = runCatchingCancellable { smsReader.readByIds(smsIds) }.getOrDefault(emptyMap())
         return pairs.map { pair ->
             val earlierTx = byId[pair.earlierId]
             val laterTx = byId[pair.laterId]

@@ -22,10 +22,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
+import app.smspend.util.runCatchingCancellable
 
 /**
  * One-time incremental inbox scan, enqueued (expedited) by
- * [app.smspend.receive.SmsReceivedReceiver] for each incoming SMS.
+ * [app.smspend.receive.SmsReceivedReceiver] for incoming bank-like SMS.
  *
  * It runs the same [app.smspend.data.SpendRepository.scanInbox] as the in-app
  * catch-up, so inserts stay keyed on the inbox `_id` and dedup is unchanged.
@@ -50,42 +51,59 @@ class SmsScanWorker(
             return Result.failure(workDataOf(KEY_ERROR to ERROR_NO_PERMISSION))
         }
 
-        val expectedBody = inputData.getString(KEY_BODY)
-        val expectedSender = inputData.getString(KEY_SENDER).orEmpty()
-        val receivedAt = inputData.getLong(KEY_RECEIVED_AT, System.currentTimeMillis())
-
         return try {
-            val landed = expectedBody.isNullOrEmpty() ||
-                awaitInboxRow(expectedSender, expectedBody, receivedAt)
-            DiagLog.i(
-                "worker",
-                "scan_worker_start",
-                mapOf("landed" to landed, "attempt" to runAttemptCount),
-            )
-            val result = app.repository.scanInbox(forceFullMonth = false)
-            if (result.newDebitTransactions > 0) {
-                SmSpendNotifications.notifyNewSpends(applicationContext, result.newDebitTransactions)
+            var landed = true
+            var lastSeq: Long? = null
+            var newDebits = 0
+            var newRows = 0
+            // Coalesce bursts: SMS arriving while this scan runs only bump the signal, and
+            // we loop until it stops changing instead of queueing one job per SMS.
+            for (round in 0 until MAX_ROUNDS) {
+                val signal = IncomingSmsSignal.read(applicationContext)
+                landed = signal?.fingerprint == null || awaitInboxRow(signal, signal.fingerprint)
+                val result = app.repository.scanInbox(forceFullMonth = false)
+                newDebits += result.newDebitTransactions
+                newRows += result.newTransactions
+                DiagLog.i(
+                    "worker",
+                    "scan_worker_round",
+                    mapOf(
+                        "round" to round,
+                        "landed" to landed,
+                        "attempt" to runAttemptCount,
+                        "scannedSms" to result.scannedSms,
+                        "newTransactions" to result.newTransactions,
+                    ),
+                )
+                lastSeq = signal?.seq
+                if (IncomingSmsSignal.read(applicationContext)?.seq == lastSeq) break
             }
-            runCatching { app.repository.runAiTriagePass() }
+            if (newDebits > 0) {
+                SmSpendNotifications.notifyNewSpends(applicationContext, newDebits)
+            }
+            // Incremental: only SMS that arrived since the last triage pass are considered.
+            runCatchingCancellable { app.repository.runAiTriagePass(incremental = true) }
                 .onFailure { e ->
                     DiagLog.e("worker", "triage_exception", mapOf("message" to (e.message ?: "unknown")))
                 }
             // Gemini failures leave rows PENDING for the next pass; they must not fail the scan.
-            runCatching { app.repository.runAiCategorizationPass() }
+            // The pass is a no-op (one indexed query) when nothing is PENDING.
+            runCatchingCancellable { app.repository.runAiCategorizationPass() }
                 .onFailure { e ->
                     DiagLog.e("worker", "ai_pass_exception", mapOf("message" to (e.message ?: "unknown")))
                 }
-            runCatching { app.repository.refreshRecurringMerchants() }
-            runCatching { SpendWidgetUpdater.update(applicationContext) }
-            DiagLog.i(
-                "worker",
-                "scan_worker_ok",
-                mapOf(
-                    "scannedSms" to result.scannedSms,
-                    "newTransactions" to result.newTransactions,
-                    "newDebitTransactions" to result.newDebitTransactions,
-                ),
-            )
+            // An SMS that arrived during the AI passes was dropped by KEEP; catch it now.
+            if (IncomingSmsSignal.read(applicationContext)?.seq != lastSeq) {
+                val late = app.repository.scanInbox(forceFullMonth = false)
+                newRows += late.newTransactions
+                if (late.newDebitTransactions > 0) {
+                    SmSpendNotifications.notifyNewSpends(applicationContext, newDebits + late.newDebitTransactions)
+                }
+            }
+            if (newRows > 0) {
+                runCatchingCancellable { app.repository.refreshRecurringMerchants() }
+                runCatchingCancellable { SpendWidgetUpdater.update(applicationContext) }
+            }
             if (!landed && runAttemptCount < MAX_RETRIES) {
                 // The SMS app hasn't saved it yet; scan again after backoff.
                 DiagLog.w("worker", "sms_not_in_inbox_yet", mapOf("attempt" to runAttemptCount))
@@ -115,12 +133,12 @@ class SmsScanWorker(
             SmSpendNotifications.scanInProgress(applicationContext),
         )
 
-    private suspend fun awaitInboxRow(sender: String, body: String, receivedAt: Long): Boolean {
+    private suspend fun awaitInboxRow(signal: IncomingSmsSignal.Snapshot, fingerprint: Int): Boolean {
         val reader = SmsInboxReader(applicationContext)
         for (wait in INBOX_POLL_DELAYS_MS) {
             if (wait > 0) delay(wait)
-            val recent = reader.readSince(receivedAt - INBOX_LOOKBACK_MS)
-            if (IncomingSms.isInInbox(recent, sender, body)) return true
+            val recent = reader.readSince(signal.receivedAt - INBOX_LOOKBACK_MS)
+            if (IncomingSms.isInInbox(recent, signal.sender, fingerprint)) return true
         }
         return false
     }
@@ -132,37 +150,27 @@ class SmsScanWorker(
         /** Periodic 30-minute scans from <= 1.2.0; cancelled on start so upgrades drop them. */
         private val LEGACY_PERIODIC_NAMES = listOf("smspend_sms_scan", "smspend_sms_scan_v2")
 
-        const val KEY_SENDER = "sender"
-        const val KEY_BODY = "body"
-        const val KEY_RECEIVED_AT = "received_at"
         const val KEY_ERROR = "error"
         const val ERROR_NO_PERMISSION = "sms_permission_missing"
 
-        /** WorkManager Data is capped at 10 KB; a prefix is enough to recognise the row. */
-        const val MAX_BODY_CHARS = 1_500
         private const val MAX_RETRIES = 3
+        private const val MAX_ROUNDS = 5
         private const val INBOX_LOOKBACK_MS = 10L * 60 * 1000
         private val INBOX_POLL_DELAYS_MS = longArrayOf(0, 1_000, 2_000, 3_000, 4_000, 5_000)
 
+        /**
+         * Records the SMS (sender + fingerprint only) and makes sure one scan is queued.
+         * KEEP: if a scan is already queued or running, it picks this SMS up through the
+         * signal (the running worker loops while the signal keeps changing).
+         */
         fun enqueueForIncoming(context: Context, sms: IncomingSms.Joined?) {
-            val data = if (sms == null) {
-                workDataOf(KEY_RECEIVED_AT to System.currentTimeMillis())
-            } else {
-                workDataOf(
-                    KEY_SENDER to sms.sender,
-                    KEY_BODY to sms.body.take(MAX_BODY_CHARS),
-                    KEY_RECEIVED_AT to System.currentTimeMillis(),
-                )
-            }
+            IncomingSmsSignal.record(context, sms)
             val request = OneTimeWorkRequestBuilder<SmsScanWorker>()
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
-                .setInputData(data)
                 .build()
-            // APPEND: an SMS arriving mid-scan gets its own pass after the current one,
-            // instead of being lost (KEEP) or cancelling the running scan (REPLACE).
             WorkManager.getInstance(context.applicationContext)
-                .enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+                .enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, request)
         }
 
         /** Drops pending receiver-triggered scans, e.g. when auto-scan is turned off. */

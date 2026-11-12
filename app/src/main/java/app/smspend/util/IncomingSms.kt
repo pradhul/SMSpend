@@ -54,6 +54,45 @@ object IncomingSms {
         }
     }
 
+    /**
+     * Cheap pre-filter run in the receiver so OTPs, personal texts and promos don't
+     * wake a scan. Skipping is never lossy: every scan re-reads the inbox from its
+     * watermark (with overlap), so anything filtered here is still picked up by the
+     * next scan or in-app catch-up.
+     */
+    fun isLikelyFinancial(sender: String, body: String): Boolean {
+        val text = body.lowercase()
+        if (text.isBlank()) return false
+        // A personal mobile number (10+ digits): banks in India send from DLT headers.
+        val digitsOnly = sender.filter { it.isDigit() }
+        if (digitsOnly.length >= 10 && sender.none { it.isLetter() }) return false
+        if (!MONEY.containsMatchIn(text)) return false
+        // OTP / verification codes, unless the same SMS also reports a completed debit.
+        if (OTP.containsMatchIn(text) && !COMPLETED.containsMatchIn(text)) return false
+        return true
+    }
+
+    /**
+     * Non-reversible fingerprint used to recognise the inbox row without keeping the
+     * SMS text in WorkManager's database.
+     */
+    fun bodyFingerprint(body: String): Int = normalizeBody(body).hashCode()
+
+    /** Whether [inbox] already holds a message with this sender and body fingerprint. */
+    fun isInInbox(inbox: List<RawSms>, sender: String, fingerprint: Int): Boolean {
+        val wantSender = normalizeSender(sender)
+        return inbox.any { sms ->
+            bodyFingerprint(sms.body) == fingerprint &&
+                (wantSender.isEmpty() || normalizeSender(sms.sender) == wantSender)
+        }
+    }
+
+    private val MONEY = Regex(
+        """(₹|\brs\.?|\binr|\bamt\b|\bamount\b|debited|credited|\bspent\b|withdrawn|\bpaid\b|\bsent\b|\bupi\b|\ba/c\b|\bacct?\b|\bcard\b|\btxn\b|\bneft\b|\bimps\b|\bach\b|\bnach\b)""",
+    )
+    private val OTP = Regex("""\botp\b|one[\s-]?time\s+pass(word|code)|verification\s+code|security\s+code""")
+    private val COMPLETED = Regex("""\b(debited|credited|spent|withdrawn)\b""")
+
     /** Collapse whitespace; some SMS apps trim or re-wrap line endings on save. */
     fun normalizeBody(body: String): String = body.replace(WHITESPACE, " ").trim()
 
